@@ -10,7 +10,8 @@
     "./auth": "./src/auth.ts",
     "./ingestion": "./src/ingestion.ts",
     "./analysis": "./src/analysis.ts",
-    "./embedding": "./src/embedding.ts"
+    "./embedding": "./src/embedding.ts",
+    "./ai-analysis": "./src/ai-analysis.ts"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

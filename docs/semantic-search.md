@@ -74,10 +74,15 @@ Repository ──▶ Ingestion (Phase 3) ──▶ RepositoryFile rows (metadata
 ```
 
 `packages/code-analysis/src/chunking` (the chunker) and `packages/ai` (the embedding provider
-abstraction + RAG context builder) are both framework-independent — no Postgres, Prisma, BullMQ, or
-Next.js import in either. `apps/worker/src/embedding` is the only thing that touches the filesystem,
-GitHub, and Postgres for the embedding side; `apps/api/src/services/search.ts` is the only thing
-that runs the pgvector query.
+abstraction + RAG context builder + retrieval) are both framework-independent — no Prisma, BullMQ, or
+Next.js import in either, though `packages/ai` does depend on `@developer-platform/database` for
+Prisma's client + `toVectorLiteral` (see "retrieval" below for why). `apps/worker/src/embedding` is
+the only thing that touches the filesystem and GitHub for the embedding side;
+`packages/ai/src/retrieval/search.ts` is the only thing that runs the pgvector query — moved here
+from `apps/api/src/services/search.ts` in Phase 6 so `apps/worker`'s AI agents could reuse the exact
+same retrieval implementation for evidence-gathering rather than a second one being built
+(`apps/api/src/routes/embeddings.ts`'s search route now imports it from `@developer-platform/ai`
+too) — see [ai-analysis.md](./ai-analysis.md).
 
 ## Why chunking reuses Phase 4's `CodeSymbol` boundaries instead of tree-sitter
 
@@ -297,7 +302,8 @@ number ahead of what was really written.
 
 ## Retrieval — hybrid semantic + lexical
 
-`apps/api/src/services/search.ts`:
+`packages/ai/src/retrieval/search.ts` (imported by both `apps/api`'s search route and
+`apps/worker`'s AI-analysis evidence gathering as of Phase 6):
 
 1. Embed the query with the same provider/model used for chunks.
 2. pgvector cosine-similarity query, scoped to `WHERE "repositoryId" = ...` (never filtered after

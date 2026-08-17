@@ -1,6 +1,18 @@
 import { prisma, toVectorLiteral } from "@developer-platform/database";
-import type { EmbeddingProvider } from "@developer-platform/ai";
 import type { RetrievalResultDto } from "@developer-platform/shared";
+import type { EmbeddingProvider } from "../embedding/types.js";
+
+/**
+ * Moved here from apps/api/src/services/search.ts in Phase 6 — Phase 6's
+ * AI agents (apps/worker) need the exact same repository-scoped hybrid
+ * retrieval Phase 5's search endpoint (apps/api) uses for evidence
+ * gathering, and the spec is explicit: reuse Phase 5's retrieval
+ * infrastructure rather than building a second one. `packages/ai` is
+ * where both apps can import it from — apps/api's route and apps/worker's
+ * agent-evidence gathering both call this same function now. Behavior is
+ * unchanged from Phase 5; only the location moved (still covered by the
+ * same tests, now at packages/ai/src/retrieval/search.test.ts).
+ */
 
 const SEMANTIC_WEIGHT = 0.75;
 const LEXICAL_WEIGHT = 0.25;

@@ -6,3 +6,6 @@
  */
 export * from "./embedding/index.js";
 export * from "./rag/index.js";
+export * from "./retrieval/index.js";
+export * from "./chat/index.js";
+export * from "./agents/index.js";

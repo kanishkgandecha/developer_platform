@@ -6,3 +6,4 @@ export * from "./crypto.js";
 export * from "./ingestion.js";
 export * from "./analysis.js";
 export * from "./embedding.js";
+export * from "./ai-analysis.js";

@@ -1,17 +1,19 @@
 # Development
 
-## What's actually implemented (Phases 1–5)
+## What's actually implemented (Phases 1–6)
 
 - `apps/web` — Next.js: `/login` (GitHub sign-in), an authenticated dashboard (`/`), a
   repository workspace (`/repositories` — sync from GitHub, search, remove, real ingestion
   status), a repository detail page (`/repositories/[id]` — ingestion status/progress, a "Code
   Intelligence" panel to analyze the repository once ingested, a "Semantic Index" panel to index it
-  for search once analyzed), an analysis detail page
-  (`/repositories/[id]/analyses/[analysisId]` — severity summary, filterable/paginated findings
-  table, a file-level code explorer), a Code Search page
+  for search once analyzed, an "AI Analysis" panel to run the seven agents once indexed), an
+  analysis detail page (`/repositories/[id]/analyses/[analysisId]` — severity summary,
+  filterable/paginated findings table, a file-level code explorer), a Code Search page
   (`/repositories/[id]/search` — semantic + lexical retrieval, expandable results with citations
-  and score breakdowns), and a `/status` page showing live API/Postgres/Redis/worker/GitHub-OAuth
-  health.
+  and score breakdowns), an AI Analysis detail page
+  (`/repositories/[id]/ai-analysis/[analysisId]` — executive summary, per-agent cards, a
+  filterable/paginated/expandable AI findings table with citations), and a `/status` page showing
+  live API/Postgres/Redis/worker/GitHub-OAuth health.
 - `apps/api` — Fastify: `GET /health`; GitHub OAuth (`/auth/github`, `/auth/github/callback`,
   `/auth/logout`, `/auth/me`, `/auth/status`); authenticated repository endpoints
   (`GET /repositories`, `GET/DELETE /repositories/:id`, `POST /repositories/connect`);
@@ -21,40 +23,52 @@
   `GET /analyses/:id/findings`, `GET /analyses/:id/files`, `GET /analyses/:id/files/:fileId`);
   authenticated embedding/search endpoints (`POST /repositories/:id/embeddings`,
   `GET /repositories/:id/embeddings`, `GET /embeddings/:id`, `POST /repositories/:id/search` — see
-  [semantic-search.md](./semantic-search.md)); session middleware, rate limiting, structured
-  logging, centralized error handling.
+  [semantic-search.md](./semantic-search.md)); authenticated AI-analysis endpoints
+  (`POST /repositories/:id/ai-analysis`, `GET /repositories/:id/ai-analysis`,
+  `GET /ai-analysis/:id`, `GET /ai-analysis/:id/agents`, `GET /ai-analysis/:id/findings`,
+  `GET /ai-analysis/:id/findings/:findingId` — see [ai-analysis.md](./ai-analysis.md)); session
+  middleware, rate limiting, structured logging, centralized error handling.
 - `apps/worker` — BullMQ workers for `test` (proves the queue round trip), `repository-ingestion`
   (Phase 3's pipeline — see [repository-ingestion.md](./repository-ingestion.md)),
-  `code-analysis` (Phase 4's pipeline — see [code-intelligence.md](./code-intelligence.md)), and
+  `code-analysis` (Phase 4's pipeline — see [code-intelligence.md](./code-intelligence.md)),
   `embeddings` (Phase 5's chunking/embedding pipeline — see
-  [semantic-search.md](./semantic-search.md)); a Redis heartbeat the API's `/health` reads to
-  report real (not hardcoded) worker liveness.
+  [semantic-search.md](./semantic-search.md)), and `ai-analysis` (Phase 6's seven-agent
+  orchestration pipeline — see [ai-analysis.md](./ai-analysis.md)); a Redis heartbeat the API's
+  `/health` reads to report real (not hardcoded) worker liveness.
 - `packages/database` — Prisma + pgvector. Models: `HealthCheck` (Phase 1); `User`,
   `GitHubAccount`, `Session`, `Repository` (Phase 2); `Ingestion`, `RepositoryFile` (Phase 3);
   `AnalysisRun`, `CodeSymbol`, `CodeImport`, `DependencyEdge`, `CodeMetric`, `Finding` (Phase 4);
-  `EmbeddingRun`, `CodeChunk` (Phase 5 — the first real `vector` column, HNSW-indexed) — see
-  [database.md](./database.md).
+  `EmbeddingRun`, `CodeChunk` (Phase 5 — the first real `vector` column, HNSW-indexed);
+  `AIAnalysisRun`, `AgentRun`, `AIFinding` (Phase 6 — the first AI-generated data in this schema)
+  — see [database.md](./database.md).
 - `packages/shared` — the environment schema (Zod), `HealthStatus`, auth DTOs
   (`AuthenticatedUser`, `AuthStatus`, cookie name constants), `RepositoryDto`, ingestion DTOs
   (`IngestionDto`, `IngestionStatus`, the ingestion queue name/payload type), analysis DTOs
   (`AnalysisRunDto`, `FindingDto`, `CodeSymbolDto`, `CodeImportDto`, `CodeMetricDto`, the analysis
   queue name/payload type), embedding/search DTOs (`EmbeddingRunDto`, `RetrievalResultDto`,
-  `SemanticSearchResponse`, the embedding queue name/payload type), and the AES-256-GCM crypto
-  implementation shared between `apps/api` and `apps/worker`.
+  `SemanticSearchResponse`, the embedding queue name/payload type), AI-analysis DTOs
+  (`AIAnalysisRunDto`, `AgentRunDto`, `AIFindingDto`, `AICitationDto`, the AI-analysis queue
+  name/payload type), and the AES-256-GCM crypto implementation shared between `apps/api` and
+  `apps/worker`.
 - `packages/code-analysis` — file classification, ignore rules, and the extension→language map
   (Phase 3); AST parsing (TypeScript/JavaScript via the TypeScript compiler API), heuristic
   parsing (Python/Java/C++/Go), metrics, dependency-graph resolution, and a five-rule
   deterministic rule engine (Phase 4); a deterministic, symbol-boundary-aware chunking engine
   (Phase 5, `src/chunking` — see [semantic-search.md](./semantic-search.md)).
-- `packages/ai` — the embedding provider abstraction (OpenAI-backed, plus a deterministic mock used
-  by every test) and the RAG context builder (Phase 5 — see
-  [semantic-search.md](./semantic-search.md)). The agent framework itself (prompts, structured
-  output, the seven agents) is still Phase 6+.
+- `packages/ai` — the embedding provider abstraction, RAG context builder, and hybrid retrieval
+  (`src/retrieval`, used by both `apps/api`'s search route and `apps/worker`'s AI-analysis
+  evidence gathering) (Phase 5); a chat/completion provider abstraction (OpenAI-backed, plus a
+  deterministic mock used by every test) and the seven agent specs/prompts/schemas (Phase 6 —
+  `src/chat`, `src/agents`) — see [semantic-search.md](./semantic-search.md) and
+  [ai-analysis.md](./ai-analysis.md).
 
-No AI agents or chat exist yet — see [architecture.md](./architecture.md)'s phased roadmap. Every
-Phase 4 finding is deterministic, rule-engine output, never AI-generated; Phase 5's only model call
-is the embedding API itself (never interpreted or summarized by another model) — see
-[semantic-search.md](./semantic-search.md) for the full scope boundary.
+No chat UI or autonomous code modification exist yet — see [architecture.md](./architecture.md)'s
+phased roadmap. Every Phase 4 finding is deterministic, rule-engine output, never AI-generated;
+Phase 5's only model call is the embedding API itself (never interpreted or summarized by another
+model); Phase 6's seven agents are the first AI-generated, user-facing content in this codebase —
+always structured, Zod-validated, and evidence-cited, never free-form prose trusted blindly. See
+[semantic-search.md](./semantic-search.md) and [ai-analysis.md](./ai-analysis.md) for the full
+scope boundaries.
 
 ## Prerequisites
 
@@ -124,9 +138,11 @@ Or scope to one app: `pnpm --filter @developer-platform/api dev`.
   two processes. Phase 4 adds a second, identically-shaped pair: the `code-analysis` queue
   (`apps/api/src/queue.ts`'s `enqueueAnalysisJob`, `apps/worker/src/jobs/analysis-job.ts`). Phase 5
   adds a third: the `embeddings` queue (`enqueueEmbeddingJob`,
-  `apps/worker/src/jobs/embedding-job.ts`). `apps/api` also calls the OpenAI embeddings API
-  directly (never through the worker) to embed a search query at request time — see
-  [semantic-search.md](./semantic-search.md).
+  `apps/worker/src/jobs/embedding-job.ts`). Phase 6 adds a fourth: the `ai-analysis` queue
+  (`enqueueAIAnalysisJob`, `apps/worker/src/jobs/ai-analysis-job.ts`). `apps/api` also calls the
+  OpenAI embeddings API directly (never through the worker) to embed a search query at request
+  time — see [semantic-search.md](./semantic-search.md); all seven agents' chat completions, by
+  contrast, only ever happen in `apps/worker` — see [ai-analysis.md](./ai-analysis.md).
 
 ## Environment variables
 
@@ -142,9 +158,11 @@ Phase 3 adds `INGESTION_WORKSPACE_DIR`, `MAX_REPOSITORY_SIZE_MB`, `MAX_FILE_SIZE
 [repository-ingestion.md](./repository-ingestion.md)), so nothing needs to be set to boot.
 Phase 5 adds `EMBEDDING_MODEL`, `EMBEDDING_DIMENSIONS`, `CHUNK_TARGET_CHARS`, `CHUNK_MAX_CHARS`,
 `CHUNK_OVERLAP_LINES`, `EMBEDDING_BATCH_SIZE` — all have sensible defaults too (see
-[semantic-search.md](./semantic-search.md)). `OPENAI_API_KEY` stays optional — the whole platform
-boots and runs without it; only "Index Repository" and semantic search report "not configured"
-until it's set.
+[semantic-search.md](./semantic-search.md)). Phase 6 adds `OPENAI_MODEL`, `AI_AGENT_CONCURRENCY`,
+`AI_AGENT_MAX_RETRIES` — same, all defaulted (see [ai-analysis.md](./ai-analysis.md)).
+`OPENAI_API_KEY` stays optional — the whole platform boots and runs without it; only "Index
+Repository"/semantic search and "Run AI Analysis" report "not configured" until it's set (the same
+key powers both features).
 
 ## Common commands
 
@@ -168,7 +186,7 @@ apps/{web,api,worker}        deployable applications
 packages/database             Prisma schema + client (the only thing that talks to Postgres directly)
 packages/shared                cross-cutting types/DTOs, env validation, crypto — safe to import anywhere
 packages/code-analysis          file classification (Phase 3); AST/heuristic parsing, symbols, dependency graph, rules (Phase 4); chunking (Phase 5)
-packages/ai                      embedding provider abstraction + RAG context builder (Phase 5); agent framework lands in Phase 6+
+packages/ai                      embedding provider + RAG context builder + retrieval (Phase 5); chat provider + seven agent specs (Phase 6)
 packages/config                 shared eslint/tsconfig/prettier, not runtime code
 ```
 
@@ -180,7 +198,7 @@ packages/config                 shared eslint/tsconfig/prettier, not runtime cod
 are fine, and `apps/api`/`apps/worker` import the barrel's values without issue (they bundle with
 tsup/esbuild, not Turbopack). The fix: value exports `apps/web` needs are also exposed as a direct
 package subpath (see `packages/shared/package.json`'s `"exports"` map — `/auth`, `/ingestion`,
-`/analysis`, `/embedding`) and imported from there instead of the barrel — see the comment in
-`apps/web/src/lib/api.ts`. This came up again in Phase 3 (`isActiveIngestionStatus`), again in
-Phase 4 (`isActiveAnalysisStatus`), and again in Phase 5 (`isActiveEmbeddingStatus`), fixed the same
-way every time.
+`/analysis`, `/embedding`, `/ai-analysis`) and imported from there instead of the barrel — see the
+comment in `apps/web/src/lib/api.ts`. This came up again in Phase 3 (`isActiveIngestionStatus`),
+again in Phase 4 (`isActiveAnalysisStatus`), again in Phase 5 (`isActiveEmbeddingStatus`), and again
+in Phase 6 (`isActiveAIAnalysisStatus`), fixed the same way every time.

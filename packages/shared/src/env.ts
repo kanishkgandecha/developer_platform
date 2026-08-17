@@ -94,20 +94,42 @@ const requiredSchema = z.object({
   // than blindly maxing out the input-count limit — see
   // docs/semantic-search.md's batching section.
   EMBEDDING_BATCH_SIZE: z.coerce.number().int().positive().max(2048).default(96),
+
+  // AI code analysis agents (Phase 6) — read by apps/worker (agent
+  // orchestration) and apps/api (the "is AI configured?" checks before
+  // enqueuing a job). All have sensible defaults — only set these to
+  // override them. See docs/ai-analysis.md.
+  //
+  // A cost-effective, structured-output-capable chat model — not the
+  // cheapest possible option, not the largest; a reasonable default for
+  // seven bounded-context analysis calls per repository. Configurable
+  // independently of EMBEDDING_MODEL (a completions model, not an
+  // embeddings model — no fixed-width database column depends on it, so
+  // changing this needs no migration, unlike EMBEDDING_MODEL).
+  OPENAI_MODEL: z.string().min(1).default("gpt-4.1-mini"),
+  // Bounded concurrency for the six primary agents — see
+  // docs/ai-analysis.md's "execution order" section for why this exists
+  // (never unlimited parallel OpenAI requests).
+  AI_AGENT_CONCURRENCY: z.coerce.number().int().positive().max(10).default(3),
+  // Bounded retry count for a single agent's structured-output call —
+  // covers both transient provider errors and a schema-invalid response;
+  // never unbounded.
+  AI_AGENT_MAX_RETRIES: z.coerce.number().int().nonnegative().max(5).default(2),
 });
 
 /**
- * OpenAI API key for the embedding provider (Phase 5) and, later, the agent
- * framework (Phase 6+). Deliberately optional — the rest of the platform
- * must boot and run without it; only the embedding/search feature itself
- * reports "not configured" (503) when it's missing. See
- * docs/semantic-search.md's "no API key" section.
+ * OpenAI API key — powers both the embedding provider (Phase 5) and the
+ * chat/completions provider the seven AI agents use (Phase 6), the same key
+ * for both. Deliberately optional — the rest of the platform must boot and
+ * run without it; only the embedding/search and AI-analysis features report
+ * "not configured" (503) when it's missing. See docs/semantic-search.md's
+ * and docs/ai-analysis.md's "no API key" sections.
  */
-const futurePhaseSchema = z.object({
+const optionalSchema = z.object({
   OPENAI_API_KEY: z.string().optional(),
 });
 
-export const envSchema = requiredSchema.merge(futurePhaseSchema);
+export const envSchema = requiredSchema.merge(optionalSchema);
 
 export type Env = z.infer<typeof envSchema>;
 

@@ -107,13 +107,16 @@ model Repository {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  ingestions    Ingestion[]
+  ingestions     Ingestion[]
   // Phase 5 — denormalized onto Repository (as well as living under
   // AnalysisRun/RepositoryFile) purely so every embedding/search query that
   // scopes by repository doesn't need to join through Ingestion first. See
   // docs/semantic-search.md.
-  embeddingRuns EmbeddingRun[]
-  codeChunks    CodeChunk[]
+  embeddingRuns  EmbeddingRun[]
+  codeChunks     CodeChunk[]
+  // Phase 6 — same denormalization reasoning as embeddingRuns above. See
+  // docs/ai-analysis.md.
+  aiAnalysisRuns AIAnalysisRun[]
 
   @@unique([userId, githubId])
   @@index([userId])
@@ -276,6 +279,8 @@ model AnalysisRun {
   // Phase 5 — at most one, see EmbeddingRun's `@@unique([analysisRunId])`.
   embeddingRun    EmbeddingRun?
   chunks          CodeChunk[]
+  // Phase 6 — at most one, see AIAnalysisRun's `@@unique([analysisRunId])`.
+  aiAnalysisRun   AIAnalysisRun?
 
   @@index([ingestionId])
   @@map("analysis_run")
@@ -607,4 +612,185 @@ model CodeChunk {
   @@index([embeddingRunId])
   @@index([contentHash])
   @@map("code_chunk")
+}
+
+// ---------------------------------------------------------------------------
+// Phase 6 — AI Code Analysis Agents
+//
+// Seven specialized agents interpret what Phases 4 (deterministic findings)
+// and 5 (semantic retrieval/RAG) already computed — this phase adds no new
+// static-analysis engine and no new vector store; it's the first phase that
+// makes an LLM call whose *output* is itself persisted and shown to the
+// user (Phase 5's only model call, the embedding API, never was). See
+// docs/ai-analysis.md.
+// ---------------------------------------------------------------------------
+
+/// Run-level state machine, named to match AnalysisRun/EmbeddingRun's
+/// convention. `COMPLETED_WITH_WARNINGS` (not just COMPLETED/FAILED) is
+/// deliberate — a single agent failing (a transient OpenAI error exhausting
+/// retries, a schema-validation failure exhausting its bounded retry)
+/// should not discard the five-or-six agents that succeeded; see
+/// docs/ai-analysis.md's "partial failure" section.
+enum AIAnalysisStatus {
+  PENDING
+  QUEUED
+  RUNNING
+  COMPLETED
+  COMPLETED_WITH_WARNINGS
+  FAILED
+}
+
+/// Exactly seven values — six primary agents plus the executive summary
+/// agent that synthesizes them. Never extended speculatively; see
+/// docs/ai-analysis.md for what each one analyzes and why exactly these
+/// seven, not more.
+enum AgentType {
+  ARCHITECTURE
+  CODE_QUALITY
+  SECURITY
+  PERFORMANCE
+  DEPENDENCY_RISK
+  DOCUMENTATION
+  EXECUTIVE_SUMMARY
+}
+
+enum AgentRunStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+  SKIPPED
+}
+
+enum AIFindingSeverity {
+  CRITICAL
+  HIGH
+  MEDIUM
+  LOW
+  INFO
+}
+
+/// One attempt at running all seven AI agents over one analysis run's
+/// already-persisted deterministic findings and semantic index. One-to-one
+/// with its AnalysisRun (`@@unique([analysisRunId])`) — mirrors
+/// EmbeddingRun's own reuse-by-id relationship with AnalysisRun: a re-run
+/// reuses (and resets) this same row rather than accumulating attempts as
+/// separate rows, which is also what makes "prevent multiple active AI
+/// analysis jobs for the same analysis" fall out for free (the unique
+/// constraint plus an active-status check on the existing row — see
+/// apps/api/src/routes/ai-analysis.ts). AI analysis is *not* idempotently
+/// reused on COMPLETED the way Ingestion reuses a completed commit — same
+/// reasoning as AnalysisRun's own non-reuse of a COMPLETED run (the engine
+/// itself, or the underlying deterministic/semantic data, can change
+/// between two requests).
+model AIAnalysisRun {
+  id            String      @id @default(cuid())
+  repositoryId  String
+  repository    Repository  @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
+  analysisRunId String      @unique
+  analysisRun   AnalysisRun @relation(fields: [analysisRunId], references: [id], onDelete: Cascade)
+
+  status AIAnalysisStatus @default(PENDING)
+  error  String?
+
+  /// Recorded per-run (not just read from env at query time), same reasoning
+  /// as EmbeddingRun.model/dimensions — a historical run stays honestly
+  /// labeled even if OPENAI_MODEL changes later.
+  provider String
+  model    String
+
+  startedAt   DateTime?
+  completedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  agentRuns AgentRun[]
+  AIFinding AIFinding[]
+
+  @@index([repositoryId])
+  @@map("ai_analysis_run")
+}
+
+/// One agent's execution within one AIAnalysisRun. `result` is the agent's
+/// complete validated structured output (its Zod schema-shaped JSON) — kept
+/// as the full record; `AIFinding` rows below are the same findings
+/// normalized into individually queryable/filterable rows (severity,
+/// agent), not a duplicate representation of different data.
+model AgentRun {
+  id              String        @id @default(cuid())
+  aiAnalysisRunId String
+  aiAnalysisRun   AIAnalysisRun @relation(fields: [aiAnalysisRunId], references: [id], onDelete: Cascade)
+
+  agent  AgentType
+  status AgentRunStatus @default(PENDING)
+
+  /// Mirrors the agent's own structured `summary` field — denormalized here
+  /// so an agent-cards list view never needs to unpack `result` just to
+  /// show a one-line summary per card.
+  summary String?
+  /// The agent's full structured output, already validated against its Zod
+  /// schema before being written — never partially-validated or raw model
+  /// text.
+  result  Json?
+  error   String?
+
+  startedAt   DateTime?
+  completedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  findings AIFinding[]
+
+  /// One row per agent per run — the orchestrator creates all seven up
+  /// front (PENDING) so progress ("2 of 7 agents complete") is always a
+  /// real query, never inferred.
+  @@unique([aiAnalysisRunId, agent])
+  @@index([aiAnalysisRunId])
+  @@map("agent_run")
+}
+
+/// One AI-generated finding, normalized out of its parent AgentRun.result
+/// for querying/filtering (by severity, by run) without unpacking JSON.
+/// Never AI-generated *without* citations — `citations` always has at
+/// least one entry, enforced by the Zod schema every finding is validated
+/// against before this row is ever written (packages/ai/src/agents/schemas.ts).
+model AIFinding {
+  id              String        @id @default(cuid())
+  agentRunId      String
+  agentRun        AgentRun      @relation(fields: [agentRunId], references: [id], onDelete: Cascade)
+  /// Denormalized — every finding list/filter query in the API is scoped by
+  /// the parent AIAnalysisRun, not by agent, so this avoids a join through
+  /// AgentRun on every read (same reasoning as CodeChunk.repositoryId).
+  aiAnalysisRunId String
+  aiAnalysisRun   AIAnalysisRun @relation(fields: [aiAnalysisRunId], references: [id], onDelete: Cascade)
+
+  /// Agent-defined free-text category (e.g. "coupling", "hardcoded-secret")
+  /// — not an enum; the seven agents' subject matter is too varied for a
+  /// fixed category list to stay meaningful, unlike `severity` below.
+  category       String
+  title          String
+  summary        String
+  severity       AIFindingSeverity
+  /// 0..1 — the model's own self-reported confidence, never fabricated by
+  /// this codebase; see docs/ai-analysis.md's "confidence" section for how
+  /// agents are instructed to calibrate it.
+  confidence     Float
+  /// What the retrieved evidence actually shows — distinct from
+  /// `recommendation` (what to do about it), enforcing the guardrail
+  /// separation between evidence and inference. See
+  /// docs/ai-analysis.md's "citations" section.
+  evidence       String
+  recommendation String
+  /// JSON array of `{ filePath, startLine, endLine, symbolName }` —
+  /// grounded in retrieval evidence actually handed to the model, never
+  /// invented by it (enforced by prompt + schema, not just asked nicely —
+  /// see docs/ai-analysis.md's "citations" section).
+  citations      Json
+
+  createdAt DateTime @default(now())
+
+  @@index([agentRunId])
+  @@index([aiAnalysisRunId])
+  @@index([severity])
+  @@map("ai_finding")
 }
