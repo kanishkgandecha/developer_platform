@@ -1,0 +1,204 @@
+// Phase 1 proved Prisma <-> Postgres <-> pgvector wiring with a minimal
+// placeholder model. Phase 2 adds the real authentication + GitHub
+// integration models. Everything else (RepositorySnapshot, CodeChunk,
+// Finding, ...) still waits for the phases that actually need it — see
+// docs/architecture.md.
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [vector]
+}
+
+/// Minimal row used by the API's /health check to prove read/write
+/// connectivity through Prisma, not just that a TCP connection succeeds.
+model HealthCheck {
+  id        Int      @id @default(autoincrement())
+  checkedAt DateTime @default(now())
+
+  @@map("health_check")
+}
+
+/// A local application user. Identity is entirely GitHub-derived in this
+/// phase (no email/password) — see GitHubAccount.
+model User {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  githubAccount GitHubAccount?
+  sessions      Session[]
+  repositories  Repository[]
+
+  @@map("user")
+}
+
+/// The GitHub identity linked to a User, plus the encrypted access token
+/// needed to call the GitHub API on their behalf. One-to-one with User
+/// (`userId` unique) — a GitHub account can't be linked to more than one
+/// local user, and vice versa.
+model GitHubAccount {
+  id     String @id @default(cuid())
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// GitHub's numeric user id — stable even if the user renames their
+  /// GitHub account, unlike `username`.
+  githubId  Int    @unique
+  username  String
+  avatarUrl String?
+
+  /// AES-256-GCM ciphertext (iv + tag + ciphertext, base64), never the raw
+  /// token. See apps/api/src/services/crypto.ts and docs/authentication.md.
+  accessTokenEncrypted String
+
+  /// Space-delimited OAuth scopes GitHub actually granted, as reported by
+  /// the token exchange response — for display/debugging, not enforcement.
+  scope String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("github_account")
+}
+
+/// A server-side session. The browser only ever holds an opaque random
+/// token in an HttpOnly cookie; this table stores a hash of that token
+/// (never the token itself) so a database read alone can't be used to
+/// impersonate a session.
+model Session {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  tokenHash String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@map("session")
+}
+
+/// Metadata for a GitHub repository a user has access to. Deliberately just
+/// enough to identify and display it — no content, no clone, no analysis
+/// data (that starts in Phase 3+). Scoped per-user rather than globally
+/// unique on `githubId`: two different local users can each have their own
+/// row for the same underlying GitHub repo (e.g. two collaborators on the
+/// same org repo), each reflecting only what that user is authorized to see.
+model Repository {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  githubId      Int
+  owner         String
+  name          String
+  fullName      String
+  defaultBranch String
+  private       Boolean
+  htmlUrl       String
+  description   String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  ingestions Ingestion[]
+
+  @@unique([userId, githubId])
+  @@index([userId])
+  @@map("repository")
+}
+
+/// Explicit ingestion state machine (see docs/repository-ingestion.md).
+/// Transitions are owned entirely by apps/worker — never client-settable.
+/// `RETRIEVING`, not the more git-flavored `CLONING`: this pipeline never
+/// runs `git clone` (a real clone can execute hooks); it downloads a GitHub
+/// tarball archive instead, and a `CLONING` label would misleadingly imply
+/// otherwise.
+enum IngestionStatus {
+  PENDING
+  QUEUED
+  RETRIEVING
+  EXTRACTING
+  SCANNING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+/// One attempt at turning a repository (at a specific commit) into scanned,
+/// persisted file metadata. Repository contents are never stored in
+/// Postgres — only this run's status/counters and, via RepositoryFile,
+/// per-file metadata. `@@unique([repositoryId, commitSha])` is the
+/// idempotency boundary: re-requesting ingestion at a commit that's already
+/// COMPLETED reuses that row instead of redoing the work.
+model Ingestion {
+  id           String          @id @default(cuid())
+  repositoryId String
+  repository   Repository      @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
+
+  status    IngestionStatus @default(PENDING)
+  commitSha String
+
+  /// Coarse, milestone-based progress (0–100) — see PROGRESS_MILESTONES in
+  /// apps/worker/src/ingestion/pipeline.ts. Never implied to be precise.
+  progress Int     @default(0)
+  error    String?
+
+  fileCount       Int?
+  sourceFileCount Int?
+
+  startedAt   DateTime?
+  completedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  files RepositoryFile[]
+
+  @@unique([repositoryId, commitSha])
+  @@index([repositoryId])
+  @@map("ingestion")
+}
+
+/// How a discovered file was classified. Whole-directory ignores
+/// (node_modules, .git, dist, ...) are pruned during the directory walk and
+/// never become a row at all — IGNORED here covers individual files
+/// excluded for other reasons (oversized, binary where unexpected, etc.)
+/// found in directories that were otherwise walked.
+enum FileCategory {
+  SOURCE
+  CONFIG
+  DOCUMENTATION
+  DATA
+  BINARY
+  GENERATED
+  IGNORED
+}
+
+/// Metadata only — never file contents. See packages/code-analysis for the
+/// classification rules that produce these rows.
+model RepositoryFile {
+  id          String    @id @default(cuid())
+  ingestionId String
+  ingestion   Ingestion @relation(fields: [ingestionId], references: [id], onDelete: Cascade)
+
+  path      String
+  name      String
+  extension String?
+  language  String?
+  category  FileCategory
+  size      Int
+  isSource  Boolean
+  isIgnored Boolean      @default(false)
+
+  createdAt DateTime @default(now())
+
+  @@unique([ingestionId, path])
+  @@index([ingestionId])
+  @@map("repository_file")
+}
