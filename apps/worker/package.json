@@ -12,6 +12,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@developer-platform/ai": "workspace:*",
     "@developer-platform/code-analysis": "workspace:*",
     "@developer-platform/database": "workspace:*",
     "@developer-platform/shared": "workspace:*",

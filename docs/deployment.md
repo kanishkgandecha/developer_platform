@@ -26,6 +26,12 @@ particular must be strong, unique values per environment — generate both with
 `GITHUB_CLIENT_SECRET` need a **separate GitHub OAuth App per environment** (its callback URL is
 environment-specific — see below), not the same app reused across dev/staging/prod.
 
+`OPENAI_API_KEY` is the one exception worth calling out explicitly: it's optional even in
+production — the platform boots and every Phase 1–4 feature works fully without it, per
+[semantic-search.md](./semantic-search.md)'s "no API key" contract. Set it once semantic
+search/indexing should actually be available to users; until then, "Index Repository" and search
+report a clean "not configured" state rather than erroring.
+
 ## GitHub OAuth in production
 
 - Register a distinct GitHub OAuth App per environment, with **Authorization callback URL** set to
@@ -51,18 +57,19 @@ entirely and needs either a shared parent domain + explicit `Domain` cookie attr
 reverse proxy unifying both under one origin — not yet implemented, tracked here rather than
 hidden.
 
-## Repository ingestion and analysis (worker) disk in production
+## Repository ingestion, analysis, and embedding (worker) disk in production
 
-Each ingestion — and, as of Phase 4, each code-analysis run, which re-downloads and re-extracts the
-same archive into its own workspace (see [code-intelligence.md](./code-intelligence.md) for why) —
-writes a temporary, per-run workspace to local disk (`INGESTION_WORKSPACE_DIR`, shared by both
-queues, see [repository-ingestion.md](./repository-ingestion.md)) and deletes it when the job
-finishes. It's ephemeral by design — no persistent volume is required, and none should be mounted (a
-crashed worker leaving orphaned workspace directories behind is a disk-quota concern, not a
-data-loss one, since nothing durable lives there). Whatever host runs `apps/worker` needs enough
-local/ephemeral disk headroom for `MAX_REPOSITORY_SIZE_MB` times the combined concurrency of *both*
-queues (2 + 2 by default = 4 simultaneous extractions worst case, since ingestion and analysis run
-as independent BullMQ workers in the same process), plus normal margin — tune
+Each ingestion, each code-analysis run (Phase 4), and each embedding run (Phase 5) independently
+re-downloads and re-extracts the same archive into its own workspace (see
+[code-intelligence.md](./code-intelligence.md) and [semantic-search.md](./semantic-search.md) for
+why) — a temporary, per-run workspace on local disk (`INGESTION_WORKSPACE_DIR`, shared by all three
+queues, see [repository-ingestion.md](./repository-ingestion.md)), deleted when the job finishes.
+It's ephemeral by design — no persistent volume is required, and none should be mounted (a crashed
+worker leaving orphaned workspace directories behind is a disk-quota concern, not a data-loss one,
+since nothing durable lives there). Whatever host runs `apps/worker` needs enough local/ephemeral
+disk headroom for `MAX_REPOSITORY_SIZE_MB` times the combined concurrency of all three queues
+(2 + 2 + 2 by default = 6 simultaneous extractions worst case, since ingestion, analysis, and
+embedding all run as independent BullMQ workers in the same process), plus normal margin — tune
 `MAX_REPOSITORY_SIZE_MB`/`MAX_FILES_PER_REPOSITORY` for production traffic rather than reusing the
 local-dev defaults unchanged.
 

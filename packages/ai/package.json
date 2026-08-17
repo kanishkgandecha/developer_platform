@@ -14,8 +14,13 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --passWithNoTests"
   },
+  "dependencies": {
+    "@developer-platform/shared": "workspace:*",
+    "openai": "^7.4.0"
+  },
   "devDependencies": {
     "@developer-platform/config": "workspace:*",
+    "@types/node": "^22.10.2",
     "typescript": "^5.7.2",
     "vitest": "^2.1.8"
   }

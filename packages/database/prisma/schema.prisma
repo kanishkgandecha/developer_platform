@@ -49,7 +49,7 @@ model GitHubAccount {
 
   /// GitHub's numeric user id — stable even if the user renames their
   /// GitHub account, unlike `username`.
-  githubId  Int    @unique
+  githubId  Int     @unique
   username  String
   avatarUrl String?
 
@@ -107,7 +107,13 @@ model Repository {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  ingestions Ingestion[]
+  ingestions    Ingestion[]
+  // Phase 5 — denormalized onto Repository (as well as living under
+  // AnalysisRun/RepositoryFile) purely so every embedding/search query that
+  // scopes by repository doesn't need to join through Ingestion first. See
+  // docs/semantic-search.md.
+  embeddingRuns EmbeddingRun[]
+  codeChunks    CodeChunk[]
 
   @@unique([userId, githubId])
   @@index([userId])
@@ -138,9 +144,9 @@ enum IngestionStatus {
 /// idempotency boundary: re-requesting ingestion at a commit that's already
 /// COMPLETED reuses that row instead of redoing the work.
 model Ingestion {
-  id           String          @id @default(cuid())
+  id           String     @id @default(cuid())
   repositoryId String
-  repository   Repository      @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
+  repository   Repository @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
 
   status    IngestionStatus @default(PENDING)
   commitSha String
@@ -202,13 +208,15 @@ model RepositoryFile {
 
   // Phase 4 — populated only for SOURCE files that were actually parsed
   // during an analysis run. See docs/code-intelligence.md.
-  symbols             CodeSymbol[]
-  imports             CodeImport[]
-  resolvedByImports   CodeImport[]     @relation("ResolvedImport")
-  dependencyEdgesOut  DependencyEdge[] @relation("DependencyEdgeSource")
-  dependencyEdgesIn   DependencyEdge[] @relation("DependencyEdgeTarget")
-  metrics             CodeMetric[]
-  findings            Finding[]
+  symbols            CodeSymbol[]
+  imports            CodeImport[]
+  resolvedByImports  CodeImport[]     @relation("ResolvedImport")
+  dependencyEdgesOut DependencyEdge[] @relation("DependencyEdgeSource")
+  dependencyEdgesIn  DependencyEdge[] @relation("DependencyEdgeTarget")
+  metrics            CodeMetric[]
+  findings           Finding[]
+  // Phase 5
+  chunks             CodeChunk[]
 
   @@unique([ingestionId, path])
   @@index([ingestionId])
@@ -265,6 +273,9 @@ model AnalysisRun {
   dependencyEdges DependencyEdge[]
   metrics         CodeMetric[]
   findings        Finding[]
+  // Phase 5 — at most one, see EmbeddingRun's `@@unique([analysisRunId])`.
+  embeddingRun    EmbeddingRun?
+  chunks          CodeChunk[]
 
   @@index([ingestionId])
   @@map("analysis_run")
@@ -289,9 +300,9 @@ enum SymbolKind {
 /// (regex/line-based) for Python/Java/C++/Go — see
 /// packages/code-analysis/src/analysis and docs/code-intelligence.md.
 model CodeSymbol {
-  id            String      @id @default(cuid())
+  id            String         @id @default(cuid())
   analysisRunId String
-  analysisRun   AnalysisRun @relation(fields: [analysisRunId], references: [id], onDelete: Cascade)
+  analysisRun   AnalysisRun    @relation(fields: [analysisRunId], references: [id], onDelete: Cascade)
   fileId        String
   file          RepositoryFile @relation(fields: [fileId], references: [id], onDelete: Cascade)
 
@@ -316,6 +327,13 @@ model CodeSymbol {
 
   createdAt DateTime @default(now())
 
+  // Phase 5 — SetNull (not Cascade): a chunk that lost its enclosing symbol
+  // (e.g. a re-analysis retry that wipes and recreates CodeSymbol rows,
+  // same pattern as CodeImport.resolvedFileId) still carries its own
+  // denormalized `symbolName` and line range, so it stays a perfectly good,
+  // independently-citable chunk — it just loses the FK-resolved link.
+  chunks CodeChunk[]
+
   @@index([analysisRunId])
   @@index([fileId])
   @@map("code_symbol")
@@ -333,9 +351,9 @@ enum ImportKind {
 /// written. Resolution into a same-repository target (or "external") is a
 /// separate, derived concept — see DependencyEdge below.
 model CodeImport {
-  id            String      @id @default(cuid())
+  id            String         @id @default(cuid())
   analysisRunId String
-  analysisRun   AnalysisRun @relation(fields: [analysisRunId], references: [id], onDelete: Cascade)
+  analysisRun   AnalysisRun    @relation(fields: [analysisRunId], references: [id], onDelete: Cascade)
   fileId        String
   file          RepositoryFile @relation(fields: [fileId], references: [id], onDelete: Cascade)
 
@@ -368,7 +386,7 @@ model DependencyEdge {
   analysisRun   AnalysisRun @relation(fields: [analysisRunId], references: [id], onDelete: Cascade)
 
   sourceFileId String
-  sourceFile   RepositoryFile @relation("DependencyEdgeSource", fields: [sourceFileId], references: [id], onDelete: Cascade)
+  sourceFile   RepositoryFile  @relation("DependencyEdgeSource", fields: [sourceFileId], references: [id], onDelete: Cascade)
   targetFileId String?
   targetFile   RepositoryFile? @relation("DependencyEdgeTarget", fields: [targetFileId], references: [id], onDelete: Cascade)
 
@@ -387,9 +405,9 @@ model DependencyEdge {
 /// packages/code-analysis/src/analysis/metrics.ts for exactly how each
 /// count is defined.
 model CodeMetric {
-  id            String      @id @default(cuid())
+  id            String         @id @default(cuid())
   analysisRunId String
-  analysisRun   AnalysisRun @relation(fields: [analysisRunId], references: [id], onDelete: Cascade)
+  analysisRun   AnalysisRun    @relation(fields: [analysisRunId], references: [id], onDelete: Cascade)
   fileId        String
   file          RepositoryFile @relation(fields: [fileId], references: [id], onDelete: Cascade)
 
@@ -404,7 +422,7 @@ model CodeMetric {
   /// Sum of the file's function/method complexities — `null` for files
   /// that aren't AST-parsed (see CodeMetrics's doc comment in
   /// packages/code-analysis).
-  complexity Int?
+  complexity       Int?
 
   createdAt DateTime @default(now())
 
@@ -426,9 +444,9 @@ enum Severity {
 /// schema doesn't assume every possible rule is file-scoped, even though
 /// every rule Phase 4 ships today is.
 model Finding {
-  id            String      @id @default(cuid())
+  id            String          @id @default(cuid())
   analysisRunId String
-  analysisRun   AnalysisRun @relation(fields: [analysisRunId], references: [id], onDelete: Cascade)
+  analysisRun   AnalysisRun     @relation(fields: [analysisRunId], references: [id], onDelete: Cascade)
   fileId        String?
   file          RepositoryFile? @relation(fields: [fileId], references: [id], onDelete: Cascade)
 
@@ -444,4 +462,149 @@ model Finding {
   @@index([analysisRunId])
   @@index([fileId])
   @@map("finding")
+}
+
+// ---------------------------------------------------------------------------
+// Phase 5 — Semantic Search + RAG Foundation
+//
+// Turns already-parsed source (RepositoryFile content, re-fetched the same
+// way Phase 4's analysis does, plus Phase 4's CodeSymbol boundaries) into
+// deterministically-chunked, embedded, pgvector-searchable CodeChunk rows.
+// No AI agents, no chat, no LLM-generated summaries here — this is the
+// retrieval layer Phase 6's agents will consume. See docs/semantic-search.md.
+// ---------------------------------------------------------------------------
+
+/// Explicit embedding state machine, named to match Ingestion/AnalysisRun's
+/// convention — but deliberately fewer states (see EmbeddingRunStatus's
+/// mirror in packages/shared/src/embedding.ts for why: no PARSING/INDEXING/
+/// ANALYZING-style breakdown, one `EMBEDDING` state covers the whole
+/// download → chunk → diff → embed → persist sequence).
+enum EmbeddingRunStatus {
+  PENDING
+  QUEUED
+  EMBEDDING
+  COMPLETED
+  FAILED
+}
+
+/// One attempt at building (or incrementally updating) the semantic index
+/// for one analysis run's current content. One-to-one with its AnalysisRun
+/// (`@@unique([analysisRunId])`) — mirrors AnalysisRun's own reuse-by-id
+/// relationship with Ingestion: re-requesting embedding for the same
+/// analysis run reuses (and resets) this same row rather than accumulating
+/// attempts as separate rows, which is also what makes "prevent multiple
+/// active embedding jobs for the same analysis" fall out for free (the
+/// unique constraint plus an active-status check on the existing row — see
+/// apps/api/src/routes/embeddings.ts).
+model EmbeddingRun {
+  id            String      @id @default(cuid())
+  repositoryId  String
+  repository    Repository  @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
+  analysisRunId String      @unique
+  analysisRun   AnalysisRun @relation(fields: [analysisRunId], references: [id], onDelete: Cascade)
+
+  status EmbeddingRunStatus @default(PENDING)
+  error  String?
+
+  /// The embedding model and its output vector width actually used for this
+  /// run — recorded per-run (not just read from env at query time) so a
+  /// historical run stays honestly labeled even if EMBEDDING_MODEL /
+  /// EMBEDDING_DIMENSIONS change later. See docs/semantic-search.md.
+  model      String
+  dimensions Int
+
+  /// Populated as soon as the diff against existing chunks is known —
+  /// before any embedding API call is made — so the UI's progress bar has a
+  /// real denominator from the start. See docs/semantic-search.md's
+  /// incremental-embedding section.
+  chunksDiscovered Int?
+  chunksReused     Int?
+  /// Incremented as each embedding batch completes (not set once at the
+  /// end) — this is the field the "N / total chunks" progress bar polls.
+  /// Never a fake/simulated increment; only ever written after a batch's
+  /// vectors are actually persisted.
+  chunksEmbedded   Int?
+  chunksDeleted    Int?
+
+  startedAt   DateTime?
+  completedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  chunks CodeChunk[]
+
+  @@index([repositoryId])
+  @@map("embedding_run")
+}
+
+/// A deterministically-chunked, embedded slice of one source file — the
+/// unit semantic search retrieves and RAG context cites. Reused in place
+/// (same row, `fileId`/`chunkIndex` pair) across re-embeds of the *same*
+/// ingestion whose content hash hasn't changed, rather than deleted and
+/// recreated — see docs/semantic-search.md's incremental-embedding section
+/// for exactly what "incremental" does and does not cover in this phase.
+///
+/// `embedding` is added by this model's migration via raw SQL as
+/// `vector(1536)` (Prisma's `Unsupported(...)` type below is a placeholder
+/// that tells `prisma migrate` to preserve whatever raw SQL type the
+/// migration file declares, and tells Prisma Client to exclude the column
+/// from its generated read/write types — every embedding read/write in this
+/// codebase goes through `$queryRaw`/`$executeRaw` with an explicit
+/// `::vector` cast, never the generated client). 1536 is `text-embedding-3-small`'s
+/// actual output width, matching `EMBEDDING_DIMENSIONS`'s default in
+/// packages/shared/src/env.ts — not a guess.
+model CodeChunk {
+  id             String         @id @default(cuid())
+  repositoryId   String
+  repository     Repository     @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
+  fileId         String
+  file           RepositoryFile @relation(fields: [fileId], references: [id], onDelete: Cascade)
+  analysisRunId  String
+  analysisRun    AnalysisRun    @relation(fields: [analysisRunId], references: [id], onDelete: Cascade)
+  embeddingRunId String
+  embeddingRun   EmbeddingRun   @relation(fields: [embeddingRunId], references: [id], onDelete: Cascade)
+
+  /// Denormalized alongside the `fileId` FK — RepositoryFile.path, at the
+  /// time this chunk was (re-)persisted. Search results and RAG citations
+  /// read this directly rather than joining RepositoryFile on every query.
+  filePath String
+
+  chunkIndex  Int
+  content     String
+  /// SHA-256 hex digest over `${filePath}::${chunkIndex}::${content}` — see
+  /// packages/code-analysis/src/chunking. The identity boundary for
+  /// incremental embedding: unchanged hash for an existing
+  /// (fileId, chunkIndex) pair means "reuse the existing vector, skip the
+  /// embedding API call."
+  contentHash String
+
+  startLine Int?
+  endLine   Int?
+
+  symbolId   String?
+  symbol     CodeSymbol? @relation(fields: [symbolId], references: [id], onDelete: SetNull)
+  /// Denormalized from CodeSymbol.name at chunk time — survives the symbol
+  /// row itself being deleted (SetNull above) on a re-analysis retry.
+  symbolName String?
+
+  language  String
+  charCount Int
+
+  /// vector(1536) — added via raw SQL in this model's migration; see the
+  /// model-level doc comment above for why Prisma can't express this
+  /// natively. `Unsupported(...)` here exists only so `prisma db pull` /
+  /// schema introspection stays accurate — it is never read or written
+  /// through Prisma Client.
+  embedding Unsupported("vector(1536)")?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  /// The identity a re-embed diffs against — see the model doc comment.
+  @@unique([fileId, chunkIndex])
+  @@index([repositoryId])
+  @@index([analysisRunId])
+  @@index([embeddingRunId])
+  @@index([contentHash])
+  @@map("code_chunk")
 }

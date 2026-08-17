@@ -16,6 +16,7 @@ if (process.env.NODE_ENV !== "production") {
 }
 
 export { PrismaClient } from "@prisma/client";
+export * from "./vector.js";
 
 /**
  * Cheap connectivity check used by the API's /health endpoint. Runs a real

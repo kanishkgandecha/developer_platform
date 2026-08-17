@@ -4,14 +4,17 @@
 
 Developer Platform ingests a GitHub repository, indexes it, runs specialized AI agents over it, and
 surfaces the results as an evidence-backed engineering dashboard with a RAG-based repo assistant.
-This document covers the system as approved for the full build. **Phases 1–4 are implemented**
+This document covers the system as approved for the full build. **Phases 1–5 are implemented**
 (foundation, then GitHub OAuth + repository access, then repository ingestion, then deterministic
-code intelligence) — see [development.md](./development.md) for what's actually running today,
-[authentication.md](./authentication.md) / [github-integration.md](./github-integration.md) for
-sign-in and GitHub access, [repository-ingestion.md](./repository-ingestion.md) for how a
-repository becomes scanned, classified file metadata, and
-[code-intelligence.md](./code-intelligence.md) for how that metadata becomes parsed symbols,
-imports, a dependency graph, and deterministic findings.
+code intelligence, then semantic search + RAG foundation) — see [development.md](./development.md)
+for what's actually running today, [authentication.md](./authentication.md) /
+[github-integration.md](./github-integration.md) for sign-in and GitHub access,
+[repository-ingestion.md](./repository-ingestion.md) for how a repository becomes scanned,
+classified file metadata, [code-intelligence.md](./code-intelligence.md) for how that metadata
+becomes parsed symbols, imports, a dependency graph, and deterministic findings, and
+[semantic-search.md](./semantic-search.md) for how that, in turn, becomes deterministically chunked,
+embedded, pgvector-searchable content with a hybrid semantic+lexical retriever and a RAG context
+builder — still no AI agents, no chat; that's Phase 6+.
 
 ```
                  ┌────────────┐
@@ -56,8 +59,8 @@ developer-platform/
 │   └── worker/                BullMQ consumers — ingestion, chunking, embedding, agents, aggregation
 ├── packages/
 │   ├── database/             Prisma schema, migrations, generated client
-│   ├── ai/                     OpenAI client, agent prompts, Zod schemas, structured-output validation (still empty — Phase 5+)
-│   ├── code-analysis/           file classification (Phase 3); AST/heuristic parsing, symbols, imports, dependency graph, deterministic rules (Phase 4)
+│   ├── ai/                     embedding provider abstraction + RAG context builder (Phase 5); agent prompts/structured-output validation land in Phase 6+
+│   ├── code-analysis/           file classification (Phase 3); AST/heuristic parsing, symbols, imports, dependency graph, deterministic rules (Phase 4); chunking (Phase 5)
 │   ├── shared/                   shared TS types, Zod DTOs, env schema, AES-256-GCM crypto
 │   └── config/                    shared eslint/tsconfig/prettier config
 ├── docker/                  per-app Dockerfiles
@@ -91,10 +94,25 @@ transpiles them via Next's `transpilePackages`, and `apps/api`/`apps/worker` bun
   Python/Java/C++/Go get honest, clearly-labeled heuristic (regex/line-based) extraction instead of
   a "fake AST" — see [code-intelligence.md](./code-intelligence.md) for the full writeup and its
   documented limitations.
-- **Embedding chunking (Phase 5+, still future) — tree-sitter AST boundaries with a heuristic
-  fallback** for languages without a grammar in the initial set. A distinct concern from Phase 4's
-  symbol/import extraction above: this is about splitting file content into embedding-sized chunks,
-  not about producing a `CodeSymbol`/`CodeImport` graph.
+- **Embedding chunking (Phase 5) — reuse Phase 4's `CodeSymbol` boundaries, not a second
+  tree-sitter-based parser.** The original plan sketched here was tree-sitter AST boundaries with a
+  heuristic fallback; once Phase 5 actually shipped, reusing the `CodeSymbol`/`startLine`/`endLine`
+  data Phase 4 already computes and persists turned out simpler and avoided introducing a second,
+  independent set of per-language native-binding grammars purely to re-derive boundaries this
+  codebase already has — the same "no native bindings, no native-module Docker build risk" tradeoff
+  Phase 4's own parsing decision made. A file with no symbols (or an unsupported language) falls back
+  to deterministic line-based chunking. See [semantic-search.md](./semantic-search.md) for the full
+  writeup.
+- **Vector search — pgvector, cosine distance, HNSW.** `code_chunk.embedding` is a fixed-width
+  `vector(1536)` column (`text-embedding-3-small`'s real output size, not guessed), added via raw SQL
+  since Prisma's schema language has no native vector type. HNSW over IVFFlat because it needs no
+  separate training/list-building step and doesn't degrade as the table grows incrementally — see
+  [semantic-search.md](./semantic-search.md).
+- **Retrieval — a small deterministic hybrid layer, not a search-ranking framework.** pgvector cosine
+  similarity for the candidate pool, re-ranked by a fixed-weight (`0.75`/`0.25`) blend with a simple
+  substring-based lexical score, specifically so an exact identifier query (e.g.
+  `"PatientDashboard"`) reliably outranks a semantically-close-but-textually-unrelated chunk. See
+  [semantic-search.md](./semantic-search.md).
 - **Deterministic vs. LLM-derived data.** Dependency manifests are parsed deterministically into
   `RepositoryDependency`; the Dependency Agent reasons over that real data instead of hallucinating
   package lists or CVEs.
@@ -115,9 +133,10 @@ Implemented so far: `HealthCheck` (Phase 1 placeholder); `User`, `GitHubAccount`
 `Repository` (Phase 2); `Ingestion`, `RepositoryFile` (Phase 3 — metadata only, no repository
 content); `AnalysisRun`, `CodeSymbol`, `CodeImport`, `DependencyEdge`, `CodeMetric`, `Finding`
 (Phase 4 — deterministic code intelligence, extending `RepositoryFile` rather than duplicating file
-metadata into a new model). Still to come: `RepositoryDependency`, `CodeChunk` (pgvector embedding),
-`AnalysisJob`, `AgentResult`, `ChatSession`, `ChatMessage` — added only in the phases that actually
-need them, per this project's own "no premature schema" principle.
+metadata into a new model); `EmbeddingRun`, `CodeChunk` (Phase 5 — the first real `vector` column,
+extending `AnalysisRun`/`RepositoryFile`/`CodeSymbol` rather than duplicating their metadata). Still
+to come: `RepositoryDependency`, `AnalysisJob`, `AgentResult`, `ChatSession`, `ChatMessage` — added
+only in the phases that actually need them, per this project's own "no premature schema" principle.
 
 ## Phased roadmap
 
@@ -132,7 +151,12 @@ need them, per this project's own "no premature schema" principle.
    (Python/Java/C++/Go), symbol/import extraction, a resolved dependency graph, deterministic
    metrics, and five rule-engine findings — no AI. See
    [code-intelligence.md](./code-intelligence.md).
-5. Embeddings + pgvector search (RAG foundation) — tree-sitter-based chunking lands here.
+5. ✅ **Semantic search + RAG foundation** — deterministic, symbol-boundary-aware chunking;
+   batched OpenAI embeddings with content-hash-based incremental re-embedding; pgvector storage
+   (`vector(1536)`, HNSW, cosine distance); a hybrid semantic+lexical retriever; a RAG context
+   builder with citations and a character/result budget; a semantic code search UI. No AI agents, no
+   chat, no LLM-generated summaries — the retrieval layer Phase 6's agents will consume. See
+   [semantic-search.md](./semantic-search.md).
 6. Agent framework + Architecture Agent + Security Agent.
 7. Remaining five agents (Bug, Code Quality, Testing, Dependency, Documentation).
 8. Job system + real-time progress (BullMQ FlowProducer, SSE).

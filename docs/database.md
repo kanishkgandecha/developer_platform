@@ -3,7 +3,7 @@
 PostgreSQL + [Prisma](https://www.prisma.io/) + [pgvector](https://github.com/pgvector/pgvector).
 Schema lives in `packages/database/prisma/schema.prisma`; migrations in
 `packages/database/prisma/migrations/`. This document covers what's actually implemented —
-the full target schema (embeddings/`CodeChunk`, agent findings history, chat, ...) is sketched in
+the full target schema (agent findings history, chat, ...) is sketched in
 [architecture.md](./architecture.md) and gets added phase-by-phase, not speculatively up front.
 
 ## Implemented models
@@ -27,8 +27,13 @@ User
                               │
                               └── AnalysisRun?                    (Phase 4 — 1:1 with Ingestion)
                                    │
-                                   └── owns the CodeSymbol/CodeImport/DependencyEdge/CodeMetric/Finding
-                                       rows above (each also FKs to its RepositoryFile)
+                                   ├── owns the CodeSymbol/CodeImport/DependencyEdge/CodeMetric/Finding
+                                   │   rows above (each also FKs to its RepositoryFile)
+                                   │
+                                   └── EmbeddingRun?                (Phase 5 — 1:1 with AnalysisRun)
+                                        │
+                                        └── CodeChunk[]                (Phase 5 — FKs to RepositoryFile,
+                                                                         CodeSymbol (nullable), Repository)
 
 HealthCheck            (Phase 1 placeholder, proves Prisma ↔ Postgres ↔ pgvector wiring)
 ```
@@ -61,20 +66,32 @@ HealthCheck            (Phase 1 placeholder, proves Prisma ↔ Postgres ↔ pgve
 | `CodeMetric`     | `analysisRunId`, `fileId`, `lineCount`, `codeLineCount`, `commentLineCount`, `blankLineCount`, `functionCount`, `classCount`, `importCount`, `exportCount`, `complexity` | `@@unique([analysisRunId, fileId])`. |
 | `Finding`        | `analysisRunId`, `fileId` (nullable), `ruleId`, `severity` (enum), `message`, `line`, `column`, `metadata` (JSON) | Always deterministic rule-engine output — never AI-generated. See [code-intelligence.md](./code-intelligence.md). |
 
+### Phase 5 — semantic search + RAG foundation
+
+| Model          | Key fields                                                                 | Notes |
+| -------------- | --------------------------------------------------------------------------- | ----- |
+| `EmbeddingRun` | `repositoryId`, `analysisRunId` (unique), `status` (enum), `error`, `model`, `dimensions`, `chunksDiscovered`, `chunksReused`, `chunksEmbedded`, `chunksDeleted`, `startedAt`, `completedAt` | `@@unique([analysisRunId])` — reused-by-id across re-embeds of the same analysis run, mirroring `AnalysisRun`'s own relationship with `Ingestion`. |
+| `CodeChunk`    | `repositoryId`, `fileId`, `analysisRunId`, `embeddingRunId`, `filePath` (denormalized), `chunkIndex`, `content`, `contentHash`, `startLine`, `endLine`, `symbolId` (nullable), `symbolName` (denormalized), `language`, `charCount`, `embedding` (`vector(1536)`) | `@@unique([fileId, chunkIndex])` — the identity a re-embed diffs `contentHash` against. See [semantic-search.md](./semantic-search.md) for the full incremental-embedding writeup. |
+
 Every user-owned table cascades on `User`/`Repository`/`Ingestion`/`AnalysisRun` deletion
-(`onDelete: Cascade`, except `CodeSymbol.parentId` and `CodeImport.resolvedFileId`, which use
-`SetNull` — deleting a symbol/file shouldn't cascade-delete every symbol/import that merely
-references it) and is indexed on its ownership-scoping foreign key for the authorization-scoped
-queries every protected route runs (never query by a bare `id` — see
+(`onDelete: Cascade`, except `CodeSymbol.parentId`, `CodeImport.resolvedFileId`, and
+`CodeChunk.symbolId`, which use `SetNull` — deleting a symbol/file shouldn't cascade-delete every
+symbol/import/chunk that merely references it) and is indexed on its ownership-scoping foreign key
+for the authorization-scoped queries every protected route runs (never query by a bare `id` — see
 [authentication.md](./authentication.md)).
 
 ## pgvector
 
 Enabled via Prisma's `postgresqlExtensions` preview feature
 (`datasource { extensions = [vector] }`), applied by the first migration
-(`CREATE EXTENSION IF NOT EXISTS "vector"`). No table uses a `vector` column yet — that lands with
-`CodeChunk` in Phase 5 (embeddings + RAG), a separate concern from Phase 4's deterministic code
-intelligence above. Verify it's actually installed with:
+(`CREATE EXTENSION IF NOT EXISTS "vector"`). Actually used starting Phase 5: `code_chunk.embedding`
+is a `vector(1536)` column (`text-embedding-3-small`'s real output width — see
+[semantic-search.md](./semantic-search.md)), added via raw SQL (Prisma's schema language has no
+native `vector` type — `Unsupported("vector(1536)")` in `schema.prisma` preserves the raw SQL type
+and excludes the column from Prisma Client's generated types entirely), with an HNSW index
+(`vector_cosine_ops`, matching the `<=>` cosine-distance operator every query in this codebase uses).
+Every embedding read/write goes through `$queryRaw`/`$executeRaw`, never the generated client — see
+`packages/database/src/vector.ts`. Verify the extension is actually installed with:
 
 ```bash
 docker compose exec postgres psql -U developer_platform -d developer_platform -c '\dx'
