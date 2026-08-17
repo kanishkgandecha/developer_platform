@@ -1,22 +1,17 @@
 # Developer Platform
 
 An AI-powered developer platform that ingests a GitHub repository, indexes it, runs specialized AI
-agents over it (architecture, security, bugs, quality, testing, dependencies, documentation), and
-surfaces the results as an evidence-backed engineering dashboard with a RAG-based repo assistant.
+agents over it (architecture, security, code quality, performance, dependencies, documentation),
+and surfaces the results as an evidence-backed engineering dashboard with semantic code search.
 
-**Status: Phase 6 — AI Code Analysis Agents.** A semantically-indexed repository can now be
-analyzed by seven specialized AI agents (Architecture, Code Quality, Security, Performance,
+**Status: V1.** A connected repository is ingested, statically analyzed, semantically indexed, and
+run through seven specialized AI agents (Architecture, Code Quality, Security, Performance,
 Dependency Risk, Documentation, and an Executive Summary that synthesizes the other six) —
 every finding is a structured, Zod-validated, confidence-scored, evidence-cited output grounded
-in Phase 4's deterministic data and Phase 5's retrieved code, never a free-form or invented
-claim. This is analysis only: no chat, no autonomous code modification, no code execution, no
-tool-calling, no GitHub PRs. It sits on top of Phase 5 (semantic search + RAG foundation —
-deterministic chunking, batched embeddings, pgvector, hybrid retrieval), Phase 4 (code
-intelligence — parsed symbols, resolved imports, a dependency graph, deterministic metrics,
-rule-based findings), Phase 3 (repository ingestion — tarball retrieval, sandboxed extraction,
-file classification), Phase 2 (GitHub OAuth sign-in, sessions, repository access), and Phase 1
-(monorepo, web/api/worker, Postgres+pgvector, Redis). A conversational AI Assistant lands in a
-later phase — see [docs/architecture.md](docs/architecture.md) for the full plan and
+in deterministic code-intelligence data and retrieved code, never a free-form or invented claim.
+This is analysis only: no chat, no autonomous code modification, no code execution, no
+tool-calling, no GitHub PRs — deliberately, not because those are coming later. See
+[docs/architecture.md](docs/architecture.md) for the full system design and
 [docs/development.md](docs/development.md) for what's actually implemented today.
 
 ## Quick start

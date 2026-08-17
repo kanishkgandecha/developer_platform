@@ -182,8 +182,9 @@ successful ingestion into a reported failure, and must never crash the worker pr
 ## Known limitations (Phase 3 scope)
 
 - Progress is polled by the client (`GET /ingestions/:id` every 2s while active), not pushed —
-  this project doesn't have SSE/WebSocket infrastructure yet; that's planned for the job-system
-  phase in [architecture.md](./architecture.md)'s roadmap.
+  this project deliberately uses client-side polling instead of SSE/WebSocket infrastructure. It's
+  a considered simplification (every status transition is still the real, current server state,
+  never a placeholder), not a placeholder or a bug; see [architecture.md](./architecture.md).
 - `CANCELLED` exists in the schema but has no API endpoint yet — an ingestion can't be cancelled
   mid-flight in Phase 3.
 - File classification is extension/filename-based only, not content-sniffed — an unusual or

@@ -2,12 +2,12 @@
 
 ## Overview
 
-Developer Platform ingests a GitHub repository, indexes it, runs specialized AI agents over it, and
-surfaces the results as an evidence-backed engineering dashboard with a RAG-based repo assistant.
-This document covers the system as approved for the full build. **Phases 1–6 are implemented**
-(foundation, then GitHub OAuth + repository access, then repository ingestion, then deterministic
-code intelligence, then semantic search + RAG foundation, then the first AI agents) — see
-[development.md](./development.md) for what's actually running today,
+Developer Platform ingests a GitHub repository, indexes it, and runs specialized AI agents over it,
+surfacing the results as an evidence-backed engineering dashboard with semantic code search.
+This document covers the system as built. **Phases 1–7 are implemented** (foundation, then GitHub
+OAuth + repository access, then repository ingestion, then deterministic code intelligence, then
+semantic search + RAG foundation, then the first AI agents, then a V1 completion/hardening pass) —
+see [development.md](./development.md) for what's actually running today,
 [authentication.md](./authentication.md) / [github-integration.md](./github-integration.md) for
 sign-in and GitHub access, [repository-ingestion.md](./repository-ingestion.md) for how a
 repository becomes scanned, classified file metadata, [code-intelligence.md](./code-intelligence.md)
@@ -15,20 +15,22 @@ for how that metadata becomes parsed symbols, imports, a dependency graph, and d
 findings, [semantic-search.md](./semantic-search.md) for how that, in turn, becomes
 deterministically chunked, embedded, pgvector-searchable content with a hybrid semantic+lexical
 retriever and a RAG context builder, and [ai-analysis.md](./ai-analysis.md) for the seven
-specialized agents that interpret all of the above into structured, evidence-cited findings — still
-no chat, no autonomous code modification; that's Phase 7+.
+specialized agents that interpret all of the above into structured, evidence-cited findings. A chat
+interface, autonomous code modification, and a dependency-graph visualization are **deliberately
+out of scope for this product** — not a placeholder, not deferred to an implied "next phase"; see
+the roadmap below.
 
 ```
                  ┌────────────┐
-   Browser  ───▶ │  apps/web  │  Next.js (App Router) — dashboard, findings UI,
-                 │            │  code viewer, architecture graph, chat UI
+   Browser  ───▶ │  apps/web  │  Next.js (App Router) — dashboard, repositories,
+                 │            │  findings, semantic search UI
                  └─────┬──────┘
-                        │ REST + SSE
+                        │ REST (client-polled progress, not pushed)
                  ┌─────▼──────┐        ┌──────────────┐
                  │  apps/api  │◀──────▶│  PostgreSQL  │ (+ pgvector)
                  │  Fastify   │        └──────────────┘
                  │  (auth,    │
-                 │  REST, SSE)│        ┌──────────────┐
+                 │   REST)    │        ┌──────────────┐
                  └─────┬──────┘◀──────▶│    Redis     │ (queues, cache, sessions)
                         │ enqueue jobs └──────┬───────┘
                  ┌─────▼──────┐               │
@@ -47,17 +49,18 @@ no chat, no autonomous code modification; that's Phase 7+.
 Analysis jobs (parsing, embedding, multiple LLM calls) are long-running and must survive
 independently of any single HTTP request, which rules out doing everything inside Next.js API
 routes / serverless functions. `apps/web` stays a normal Next.js deploy; `apps/api` and
-`apps/worker` are plain long-running Node processes. Real-time progress uses Server-Sent Events
-(one-directional, rides plain HTTP) rather than WebSockets, since nothing here needs bidirectional
-communication.
+`apps/worker` are plain long-running Node processes. Real-time progress is client-side polling
+against plain REST endpoints (see each pipeline's `use-*-polling.ts` hook in `apps/web/src/hooks`)
+rather than SSE or WebSockets — a deliberate simplification, not a placeholder: every polled value
+is the real, current server state.
 
 ## Monorepo layout
 
 ```
 developer-platform/
 ├── apps/
-│   ├── web/               Next.js — dashboard, findings, code viewer, architecture graph, chat
-│   ├── api/                 Fastify — auth, REST, SSE progress/chat streaming
+│   ├── web/               Next.js — dashboard, repositories, findings, semantic search UI
+│   ├── api/                 Fastify — auth, REST (client-polled progress)
 │   └── worker/                BullMQ consumers — ingestion, chunking, embedding, agents, aggregation
 ├── packages/
 │   ├── database/             Prisma schema, migrations, generated client
@@ -153,8 +156,10 @@ metadata into a new model); `EmbeddingRun`, `CodeChunk` (Phase 5 — the first r
 extending `AnalysisRun`/`RepositoryFile`/`CodeSymbol` rather than duplicating their metadata);
 `AIAnalysisRun`, `AgentRun`, `AIFinding` (Phase 6 — the first AI-generated data in this schema,
 extending `AnalysisRun` rather than duplicating its metadata; findings are normalized rows, not one
-JSON blob per run). Still to come: `RepositoryDependency`, `ChatSession`, `ChatMessage` — added only
-in the phases that actually need them, per this project's own "no premature schema" principle.
+JSON blob per run). `RepositoryDependency` (a first-class table for the dependency graph, instead of
+deriving it from `CodeImport` on every read) is a plausible future addition if a dedicated
+architecture-visualization view is ever built — see item 8 below. No `ChatSession`/`ChatMessage`
+models exist, and none are planned; this product doesn't have a chat feature (see the Overview).
 
 ## Phased roadmap
 
@@ -173,16 +178,26 @@ in the phases that actually need them, per this project's own "no premature sche
    batched OpenAI embeddings with content-hash-based incremental re-embedding; pgvector storage
    (`vector(1536)`, HNSW, cosine distance); a hybrid semantic+lexical retriever; a RAG context
    builder with citations and a character/result budget; a semantic code search UI. No AI agents, no
-   chat, no LLM-generated summaries — the retrieval layer Phase 6's agents will consume. See
+   chat, no LLM-generated summaries — the retrieval layer Phase 6's agents consume. See
    [semantic-search.md](./semantic-search.md).
-6. ✅ **AI code analysis agents** — an AI provider abstraction (OpenAI chat + a deterministic mock
-   for tests); seven specialized agents (Architecture, Code Quality, Security, Performance,
-   Dependency Risk, Documentation, Executive Summary) that interpret Phase 4/5's deterministic
-   findings and retrieved code into structured, Zod-validated, evidence-cited findings; bounded
-   concurrency/retries; partial-failure tolerance (`COMPLETED_WITH_WARNINGS`); an AI Analysis panel
-   and detail UI. No chat, no autonomous code modification, no tool-calling. See
+6. ✅ **AI code analysis agents** — an AI provider abstraction (OpenAI chat completions + a
+   deterministic mock for tests); seven specialized agents (Architecture, Code Quality, Security,
+   Performance, Dependency Risk, Documentation, Executive Summary) that interpret Phase 4/5's
+   deterministic findings and retrieved code into structured, Zod-validated, evidence-cited
+   findings; bounded concurrency/retries; partial-failure tolerance (`COMPLETED_WITH_WARNINGS`); an
+   AI Analysis panel and detail UI. No chat, no autonomous code modification, no tool-calling. See
    [ai-analysis.md](./ai-analysis.md).
-7. Job system + real-time progress (BullMQ FlowProducer, SSE).
-8. Findings UI, code viewer, architecture visualization, repo chat (RAG).
-9. Testing, observability, security hardening.
-10. Polish — README, docs, demo data, deployment.
+7. ✅ **Product completion & V1 hardening** — a full audit pass over Phases 1–6: closing reliability
+   gaps (e.g. permanently-stuck job recovery), fixing stale/misleading UI copy, bounding previously
+   unbounded queries, a security/data-integrity/observability review, and bringing this
+   documentation back in sync with the real system. No new product surface area.
+
+V1 is everything above. The following are known, deliberately out-of-scope ideas for a possible
+future product direction — not commitments, not "coming soon," and not silently dropped:
+
+8. Dependency-graph visualization (a dedicated UI over the `CodeImport`/`DependencyEdge` data
+   Phase 4 already computes).
+9. A chat/assistant interface over the RAG retrieval layer Phase 5 already built. Explicitly not
+   attempted in V1 (see the Overview) — retrieval-only semantic search is the shipped feature.
+10. Deeper observability/CI integrations, if this ever needs to run at a scale where the
+    Docker-Compose-local + structured-logs approach stops being enough.
