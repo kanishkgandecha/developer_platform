@@ -4,18 +4,20 @@ An AI-powered developer platform that ingests a GitHub repository, indexes it, r
 agents over it (architecture, security, bugs, quality, testing, dependencies, documentation), and
 surfaces the results as an evidence-backed engineering dashboard with a RAG-based repo assistant.
 
-**Status: Phase 5 — Semantic Search + RAG Foundation.** A repository that's been ingested and
-analyzed can now be semantically indexed and searched: deterministic, symbol-boundary-aware
-chunking, batched OpenAI embeddings with content-hash-based incremental re-embedding, pgvector
-storage (HNSW, cosine distance), a hybrid semantic+lexical retriever, and a RAG context builder with
-source citations — the retrieval layer Phase 6's AI agents will consume. Still no AI agents, no
-chat, no LLM-generated summaries anywhere; the only model call in this phase is the embedding API
-itself. This sits on top of Phase 4 (code intelligence — parsed symbols, resolved imports, a
-dependency graph, deterministic metrics, rule-based findings), Phase 3 (repository ingestion —
-tarball retrieval, sandboxed extraction, file classification), Phase 2 (GitHub OAuth sign-in,
-sessions, repository access), and Phase 1 (monorepo, web/api/worker, Postgres+pgvector, Redis). The
-AI agents themselves land in Phase 6+ — see [docs/architecture.md](docs/architecture.md) for the
-full plan and [docs/development.md](docs/development.md) for what's actually implemented today.
+**Status: Phase 6 — AI Code Analysis Agents.** A semantically-indexed repository can now be
+analyzed by seven specialized AI agents (Architecture, Code Quality, Security, Performance,
+Dependency Risk, Documentation, and an Executive Summary that synthesizes the other six) —
+every finding is a structured, Zod-validated, confidence-scored, evidence-cited output grounded
+in Phase 4's deterministic data and Phase 5's retrieved code, never a free-form or invented
+claim. This is analysis only: no chat, no autonomous code modification, no code execution, no
+tool-calling, no GitHub PRs. It sits on top of Phase 5 (semantic search + RAG foundation —
+deterministic chunking, batched embeddings, pgvector, hybrid retrieval), Phase 4 (code
+intelligence — parsed symbols, resolved imports, a dependency graph, deterministic metrics,
+rule-based findings), Phase 3 (repository ingestion — tarball retrieval, sandboxed extraction,
+file classification), Phase 2 (GitHub OAuth sign-in, sessions, repository access), and Phase 1
+(monorepo, web/api/worker, Postgres+pgvector, Redis). A conversational AI Assistant lands in a
+later phase — see [docs/architecture.md](docs/architecture.md) for the full plan and
+[docs/development.md](docs/development.md) for what's actually implemented today.
 
 ## Quick start
 
@@ -44,4 +46,5 @@ sign in with GitHub and ingest a repository, see
 - [docs/repository-ingestion.md](docs/repository-ingestion.md) — ingestion pipeline, security model, limits
 - [docs/code-intelligence.md](docs/code-intelligence.md) — parsing, symbols, dependency graph, deterministic rules
 - [docs/semantic-search.md](docs/semantic-search.md) — chunking, embeddings, pgvector, hybrid retrieval, RAG context
+- [docs/ai-analysis.md](docs/ai-analysis.md) — the seven AI agents, structured output, citations, prompt injection defense
 - [docs/deployment.md](docs/deployment.md) — production topology notes

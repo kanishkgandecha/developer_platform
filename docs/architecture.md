@@ -4,17 +4,19 @@
 
 Developer Platform ingests a GitHub repository, indexes it, runs specialized AI agents over it, and
 surfaces the results as an evidence-backed engineering dashboard with a RAG-based repo assistant.
-This document covers the system as approved for the full build. **Phases 1–5 are implemented**
+This document covers the system as approved for the full build. **Phases 1–6 are implemented**
 (foundation, then GitHub OAuth + repository access, then repository ingestion, then deterministic
-code intelligence, then semantic search + RAG foundation) — see [development.md](./development.md)
-for what's actually running today, [authentication.md](./authentication.md) /
-[github-integration.md](./github-integration.md) for sign-in and GitHub access,
-[repository-ingestion.md](./repository-ingestion.md) for how a repository becomes scanned,
-classified file metadata, [code-intelligence.md](./code-intelligence.md) for how that metadata
-becomes parsed symbols, imports, a dependency graph, and deterministic findings, and
-[semantic-search.md](./semantic-search.md) for how that, in turn, becomes deterministically chunked,
-embedded, pgvector-searchable content with a hybrid semantic+lexical retriever and a RAG context
-builder — still no AI agents, no chat; that's Phase 6+.
+code intelligence, then semantic search + RAG foundation, then the first AI agents) — see
+[development.md](./development.md) for what's actually running today,
+[authentication.md](./authentication.md) / [github-integration.md](./github-integration.md) for
+sign-in and GitHub access, [repository-ingestion.md](./repository-ingestion.md) for how a
+repository becomes scanned, classified file metadata, [code-intelligence.md](./code-intelligence.md)
+for how that metadata becomes parsed symbols, imports, a dependency graph, and deterministic
+findings, [semantic-search.md](./semantic-search.md) for how that, in turn, becomes
+deterministically chunked, embedded, pgvector-searchable content with a hybrid semantic+lexical
+retriever and a RAG context builder, and [ai-analysis.md](./ai-analysis.md) for the seven
+specialized agents that interpret all of the above into structured, evidence-cited findings — still
+no chat, no autonomous code modification; that's Phase 7+.
 
 ```
                  ┌────────────┐
@@ -59,7 +61,7 @@ developer-platform/
 │   └── worker/                BullMQ consumers — ingestion, chunking, embedding, agents, aggregation
 ├── packages/
 │   ├── database/             Prisma schema, migrations, generated client
-│   ├── ai/                     embedding provider abstraction + RAG context builder (Phase 5); agent prompts/structured-output validation land in Phase 6+
+│   ├── ai/                     embedding provider + RAG context builder + retrieval (Phase 5); chat provider abstraction + seven agent specs/prompts/schemas (Phase 6)
 │   ├── code-analysis/           file classification (Phase 3); AST/heuristic parsing, symbols, imports, dependency graph, deterministic rules (Phase 4); chunking (Phase 5)
 │   ├── shared/                   shared TS types, Zod DTOs, env schema, AES-256-GCM crypto
 │   └── config/                    shared eslint/tsconfig/prettier config
@@ -113,12 +115,26 @@ transpiles them via Next's `transpilePackages`, and `apps/api`/`apps/worker` bun
   substring-based lexical score, specifically so an exact identifier query (e.g.
   `"PatientDashboard"`) reliably outranks a semantically-close-but-textually-unrelated chunk. See
   [semantic-search.md](./semantic-search.md).
-- **Deterministic vs. LLM-derived data.** Dependency manifests are parsed deterministically into
-  `RepositoryDependency`; the Dependency Agent reasons over that real data instead of hallucinating
-  package lists or CVEs.
-- **Structured output validation.** Every agent response is a Zod schema exposed to OpenAI as a JSON
-  Schema; one repair retry is allowed on validation failure, then the job fails outright — nothing
-  invalid is ever written to `Finding`/`AgentResult`.
+- **Deterministic vs. LLM-derived data.** Every number an agent cites comes from Phase 4/5's
+  already-persisted data — a file's line count, a function's complexity, a dependency edge, a
+  retrieved code chunk — never from the model recomputing or guessing it; the model's job is
+  interpretation, not measurement. See [ai-analysis.md](./ai-analysis.md)'s "core principle"
+  section. (A separate, still-future idea — deterministically parsing dependency *manifests*
+  (`package.json`/`requirements.txt`/...) into a `RepositoryDependency` model so a future agent
+  can reason about outdated packages/CVEs — is not what Phase 6's Dependency Risk agent does; that
+  agent reasons over the *code* dependency graph (`DependencyEdge`, Phase 4) already built from
+  actual import statements, not package manifests.)
+- **Structured output validation — seven agents, one shared schema shape.** Every AI agent
+  response (the six primary agents and the executive summary agent) is a Zod schema exposed to
+  OpenAI as a JSON Schema (`response_format: zodResponseFormat(...)`); a bounded retry
+  (`AI_AGENT_MAX_RETRIES`, default 2) is allowed on a malformed-JSON or schema-invalid response,
+  then that one agent (never the whole run) is marked `FAILED` — nothing invalid is ever written
+  to `AgentRun`/`AIFinding`. See [ai-analysis.md](./ai-analysis.md).
+- **Prompt injection defense — repository content is data, never instructions.** One shared
+  guardrail prefix (`AGENT_SYSTEM_GUARDRAILS`) on every agent's system prompt states this
+  explicitly; retrieved/deterministic evidence only ever lands in the user-prompt data section,
+  proven structurally (not just asked of the model) by
+  `packages/ai/src/agents/prompt-injection.test.ts`. See [ai-analysis.md](./ai-analysis.md).
 - **Sessions — opaque token + server-side hash, not JWT.** The browser holds a random bearer
   token; Postgres stores only its SHA-256 hash. No GitHub access token ever reaches a JWT payload
   or the browser. See [authentication.md](./authentication.md).
@@ -134,9 +150,11 @@ Implemented so far: `HealthCheck` (Phase 1 placeholder); `User`, `GitHubAccount`
 content); `AnalysisRun`, `CodeSymbol`, `CodeImport`, `DependencyEdge`, `CodeMetric`, `Finding`
 (Phase 4 — deterministic code intelligence, extending `RepositoryFile` rather than duplicating file
 metadata into a new model); `EmbeddingRun`, `CodeChunk` (Phase 5 — the first real `vector` column,
-extending `AnalysisRun`/`RepositoryFile`/`CodeSymbol` rather than duplicating their metadata). Still
-to come: `RepositoryDependency`, `AnalysisJob`, `AgentResult`, `ChatSession`, `ChatMessage` — added
-only in the phases that actually need them, per this project's own "no premature schema" principle.
+extending `AnalysisRun`/`RepositoryFile`/`CodeSymbol` rather than duplicating their metadata);
+`AIAnalysisRun`, `AgentRun`, `AIFinding` (Phase 6 — the first AI-generated data in this schema,
+extending `AnalysisRun` rather than duplicating its metadata; findings are normalized rows, not one
+JSON blob per run). Still to come: `RepositoryDependency`, `ChatSession`, `ChatMessage` — added only
+in the phases that actually need them, per this project's own "no premature schema" principle.
 
 ## Phased roadmap
 
@@ -157,9 +175,14 @@ only in the phases that actually need them, per this project's own "no premature
    builder with citations and a character/result budget; a semantic code search UI. No AI agents, no
    chat, no LLM-generated summaries — the retrieval layer Phase 6's agents will consume. See
    [semantic-search.md](./semantic-search.md).
-6. Agent framework + Architecture Agent + Security Agent.
-7. Remaining five agents (Bug, Code Quality, Testing, Dependency, Documentation).
-8. Job system + real-time progress (BullMQ FlowProducer, SSE).
-9. Findings UI, code viewer, architecture visualization, repo chat (RAG).
-10. Testing, observability, security hardening.
-11. Polish — README, docs, demo data, deployment.
+6. ✅ **AI code analysis agents** — an AI provider abstraction (OpenAI chat + a deterministic mock
+   for tests); seven specialized agents (Architecture, Code Quality, Security, Performance,
+   Dependency Risk, Documentation, Executive Summary) that interpret Phase 4/5's deterministic
+   findings and retrieved code into structured, Zod-validated, evidence-cited findings; bounded
+   concurrency/retries; partial-failure tolerance (`COMPLETED_WITH_WARNINGS`); an AI Analysis panel
+   and detail UI. No chat, no autonomous code modification, no tool-calling. See
+   [ai-analysis.md](./ai-analysis.md).
+7. Job system + real-time progress (BullMQ FlowProducer, SSE).
+8. Findings UI, code viewer, architecture visualization, repo chat (RAG).
+9. Testing, observability, security hardening.
+10. Polish — README, docs, demo data, deployment.

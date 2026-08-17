@@ -28,9 +28,13 @@ environment-specific — see below), not the same app reused across dev/staging/
 
 `OPENAI_API_KEY` is the one exception worth calling out explicitly: it's optional even in
 production — the platform boots and every Phase 1–4 feature works fully without it, per
-[semantic-search.md](./semantic-search.md)'s "no API key" contract. Set it once semantic
-search/indexing should actually be available to users; until then, "Index Repository" and search
-report a clean "not configured" state rather than erroring.
+[semantic-search.md](./semantic-search.md)'s and [ai-analysis.md](./ai-analysis.md)'s "no API key"
+contracts (the same key gates both semantic search/indexing and AI analysis). Set it once those
+features should actually be available to users; until then, "Index Repository", search, and "Run AI
+Analysis" all report a clean "not configured" state rather than erroring or queuing doomed jobs.
+Note that an *invalid or quota-exhausted* key is a different failure mode than a *missing* one —
+see this phase's verification report for what that actually looks like in practice (a `FAILED`
+run with a real, disclosed error, never a silently fake success).
 
 ## GitHub OAuth in production
 
@@ -67,11 +71,14 @@ queues, see [repository-ingestion.md](./repository-ingestion.md)), deleted when 
 It's ephemeral by design — no persistent volume is required, and none should be mounted (a crashed
 worker leaving orphaned workspace directories behind is a disk-quota concern, not a data-loss one,
 since nothing durable lives there). Whatever host runs `apps/worker` needs enough local/ephemeral
-disk headroom for `MAX_REPOSITORY_SIZE_MB` times the combined concurrency of all three queues
-(2 + 2 + 2 by default = 6 simultaneous extractions worst case, since ingestion, analysis, and
-embedding all run as independent BullMQ workers in the same process), plus normal margin — tune
-`MAX_REPOSITORY_SIZE_MB`/`MAX_FILES_PER_REPOSITORY` for production traffic rather than reusing the
-local-dev defaults unchanged.
+disk headroom for `MAX_REPOSITORY_SIZE_MB` times the combined concurrency of all three
+archive-downloading queues (2 + 2 + 2 by default = 6 simultaneous extractions worst case, since
+ingestion, analysis, and embedding all run as independent BullMQ workers in the same process), plus
+normal margin — tune `MAX_REPOSITORY_SIZE_MB`/`MAX_FILES_PER_REPOSITORY` for production traffic
+rather than reusing the local-dev defaults unchanged. **AI analysis (Phase 6) is the exception** —
+it never downloads a repository archive at all, reading only what Phases 4/5 already persisted in
+Postgres/pgvector, so it needs no disk headroom of its own; see
+[ai-analysis.md](./ai-analysis.md).
 
 ## Not yet solved (tracked for the phase that needs it)
 
