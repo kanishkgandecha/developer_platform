@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { prisma } from "@developer-platform/database";
 import type { RepositoryDto } from "@developer-platform/shared";
-import type { Ingestion, Repository } from "@prisma/client";
+import type { AnalysisRun, Ingestion, Repository } from "@prisma/client";
 import { requireAuth } from "../plugins/auth.js";
 import { decryptToken } from "../services/crypto.js";
 import { GitHubApiError, listAuthenticatedRepositories } from "../services/github.js";
@@ -12,12 +12,14 @@ const repositoryIdParamsSchema = z.object({
   id: z.string().cuid("Invalid repository id"),
 });
 
-/** Embeds only the most recent ingestion — see RepositoryDto.latestIngestion's doc comment. */
+/** Embeds only the most recent ingestion (and, transitively, its analysis run) — see RepositoryDto.latestIngestion's doc comment. */
 const LATEST_INGESTION_INCLUDE = {
-  ingestions: { orderBy: { createdAt: "desc" as const }, take: 1 },
+  ingestions: { orderBy: { createdAt: "desc" as const }, take: 1, include: { analysisRun: true } },
 };
 
-type RepositoryWithLatestIngestion = Repository & { ingestions: Ingestion[] };
+type RepositoryWithLatestIngestion = Repository & {
+  ingestions: (Ingestion & { analysisRun: AnalysisRun | null })[];
+};
 
 function toDto(repo: RepositoryWithLatestIngestion): RepositoryDto {
   return {

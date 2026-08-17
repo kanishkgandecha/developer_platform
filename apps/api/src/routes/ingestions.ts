@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { prisma } from "@developer-platform/database";
-import type { Ingestion } from "@prisma/client";
+import type { AnalysisRun, Ingestion } from "@prisma/client";
 import {
   ACTIVE_INGESTION_STATUSES,
   type IngestionDto,
@@ -11,6 +11,7 @@ import { requireAuth } from "../plugins/auth.js";
 import { enqueueIngestionJob } from "../queue.js";
 import { decryptToken } from "../services/crypto.js";
 import { GitHubApiError, getBranchHeadSha } from "../services/github.js";
+import { toAnalysisRunDto } from "./analyses.js";
 
 const repositoryIdParamsSchema = z.object({
   id: z.string().cuid("Invalid repository id"),
@@ -20,7 +21,13 @@ const ingestionIdParamsSchema = z.object({
   id: z.string().cuid("Invalid ingestion id"),
 });
 
-export function toIngestionDto(ingestion: Ingestion): IngestionDto {
+/** Includes the Phase 4 analysis relation — see LATEST_INGESTION_INCLUDE-style helpers everywhere this route file's Prisma queries run. */
+const ANALYSIS_RUN_INCLUDE = { analysisRun: true };
+
+type IngestionWithAnalysis = Ingestion & { analysisRun?: AnalysisRun | null };
+
+/** `analysisRun` is optional on the input type: a freshly created/updated Ingestion (POST's create/update path) never has one yet — realistically impossible anyway, since analysis requires an already-COMPLETED ingestion. */
+export function toIngestionDto(ingestion: IngestionWithAnalysis): IngestionDto {
   return {
     id: ingestion.id,
     repositoryId: ingestion.repositoryId,
@@ -34,6 +41,7 @@ export function toIngestionDto(ingestion: Ingestion): IngestionDto {
     completedAt: ingestion.completedAt?.toISOString() ?? null,
     createdAt: ingestion.createdAt.toISOString(),
     updatedAt: ingestion.updatedAt.toISOString(),
+    latestAnalysis: ingestion.analysisRun ? toAnalysisRunDto(ingestion.analysisRun) : null,
   };
 }
 
@@ -164,6 +172,7 @@ export function registerIngestionRoutes(app: FastifyInstance): void {
     const ingestions = await prisma.ingestion.findMany({
       where: { repositoryId: repository.id },
       orderBy: { createdAt: "desc" },
+      include: ANALYSIS_RUN_INCLUDE,
     });
 
     return reply.send({ ingestions: ingestions.map(toIngestionDto) });
@@ -182,6 +191,7 @@ export function registerIngestionRoutes(app: FastifyInstance): void {
     // repository simply doesn't match, same 404 as a nonexistent one.
     const ingestion = await prisma.ingestion.findFirst({
       where: { id: params.data.id, repository: { userId: request.user.id } },
+      include: ANALYSIS_RUN_INCLUDE,
     });
     if (!ingestion) {
       return reply.code(404).send(errorBody("Ingestion not found", 404));
