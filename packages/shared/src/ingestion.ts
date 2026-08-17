@@ -1,3 +1,5 @@
+import type { AnalysisRunDto } from "./analysis.js";
+
 /**
  * Mirrors the Prisma `IngestionStatus` enum (packages/database/prisma/schema.prisma).
  * Duplicated here (not imported from @prisma/client) so packages/web — which
@@ -45,6 +47,8 @@ export interface IngestionDto {
   completedAt: string | null;
   createdAt: string;
   updatedAt: string;
+  /** Phase 4 — the ingestion's code-analysis run, if one has been started. `null` means "never analyzed." */
+  latestAnalysis: AnalysisRunDto | null;
 }
 
 /**

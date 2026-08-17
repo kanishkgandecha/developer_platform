@@ -4,3 +4,4 @@ export * from "./auth.js";
 export * from "./repository.js";
 export * from "./crypto.js";
 export * from "./ingestion.js";
+export * from "./analysis.js";

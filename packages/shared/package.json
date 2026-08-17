@@ -8,7 +8,8 @@
   "exports": {
     ".": "./src/index.ts",
     "./auth": "./src/auth.ts",
-    "./ingestion": "./src/ingestion.ts"
+    "./ingestion": "./src/ingestion.ts",
+    "./analysis": "./src/analysis.ts"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
