@@ -119,4 +119,21 @@ describe("loadEnv", () => {
   it("rejects an embedding batch size above OpenAI's 2048-input request ceiling", () => {
     expect(() => loadEnv({ ...validEnv, EMBEDDING_BATCH_SIZE: "4000" })).toThrowError(/EMBEDDING_BATCH_SIZE/);
   });
+
+  it("defaults the Phase 6 AI analysis configuration when unset", () => {
+    const env = loadEnv(validEnv);
+    expect(env.OPENAI_MODEL).toBe("gpt-4.1-mini");
+    expect(env.AI_AGENT_CONCURRENCY).toBe(3);
+    expect(env.AI_AGENT_MAX_RETRIES).toBe(2);
+  });
+
+  it("coerces and honors an overridden agent concurrency/retry count", () => {
+    const env = loadEnv({ ...validEnv, AI_AGENT_CONCURRENCY: "5", AI_AGENT_MAX_RETRIES: "0" });
+    expect(env.AI_AGENT_CONCURRENCY).toBe(5);
+    expect(env.AI_AGENT_MAX_RETRIES).toBe(0);
+  });
+
+  it("rejects an agent concurrency above the sanity ceiling (never unlimited parallel OpenAI requests)", () => {
+    expect(() => loadEnv({ ...validEnv, AI_AGENT_CONCURRENCY: "50" })).toThrowError(/AI_AGENT_CONCURRENCY/);
+  });
 });
