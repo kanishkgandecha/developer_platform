@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { ExternalLink, Lock } from "lucide-react";
 import type { RepositoryDto } from "@developer-platform/shared";
 import { Badge } from "@/components/ui/badge";
+import { AnalysisPanel } from "@/components/analysis/analysis-panel";
 import { IngestionPanel } from "@/components/ingestion/ingestion-panel";
 import { Reveal } from "@/components/motion/reveal";
 import { requireUser } from "@/lib/auth";
@@ -62,6 +63,10 @@ export default async function RepositoryDetailPage({ params }: PageProps<"/repos
 
       <Reveal delay={0.06}>
         <IngestionPanel repositoryId={repository.id} initialIngestion={repository.latestIngestion} />
+      </Reveal>
+
+      <Reveal delay={0.12}>
+        <AnalysisPanel repositoryId={repository.id} ingestion={repository.latestIngestion} />
       </Reveal>
     </div>
   );
