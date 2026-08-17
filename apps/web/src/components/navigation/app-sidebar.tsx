@@ -11,7 +11,6 @@ import {
   type LucideIcon,
   Network,
   Settings,
-  ShieldAlert,
   Sparkles,
 } from "lucide-react";
 import type { AuthenticatedUser } from "@developer-platform/shared";
@@ -41,11 +40,14 @@ const WORKSPACE_ITEMS: NavItem[] = [
   { label: "Repositories", href: "/repositories", icon: FolderGit2 },
 ];
 
-// These land in later phases — kept visible (disabled) so the full
-// information architecture is legible now, per docs/architecture.md's roadmap.
+// Analyses and code-quality/AI findings are fully built, but reached via
+// each repository's own detail page rather than a global cross-repository
+// list — that's the intended navigation model (see docs/code-intelligence.md
+// and docs/ai-analysis.md), not a placeholder. Only genuinely unbuilt items
+// stay here, disabled: Architecture (dependency-graph visualization, a later
+// phase per docs/architecture.md's roadmap) and AI Assistant (a chat
+// interface, explicitly out of scope for this product — see docs/ai-analysis.md).
 const INTELLIGENCE_ITEMS: NavItem[] = [
-  { label: "Analyses", icon: Activity },
-  { label: "Findings", icon: ShieldAlert },
   { label: "Architecture", icon: Network },
   { label: "AI Assistant", icon: Sparkles },
 ];
