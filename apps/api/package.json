@@ -12,6 +12,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@developer-platform/ai": "workspace:*",
     "@developer-platform/database": "workspace:*",
     "@developer-platform/shared": "workspace:*",
     "@prisma/client": "^5.22.0",
@@ -29,6 +30,7 @@
     "zod": "^3.24.1"
   },
   "devDependencies": {
+    "@developer-platform/code-analysis": "workspace:*",
     "@developer-platform/config": "workspace:*",
     "@types/node": "^22.10.2",
     "tsup": "^8.3.5",

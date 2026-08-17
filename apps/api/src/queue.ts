@@ -2,8 +2,10 @@ import { Queue } from "bullmq";
 import { Redis } from "ioredis";
 import {
   ANALYSIS_QUEUE_NAME,
+  EMBEDDING_QUEUE_NAME,
   INGESTION_QUEUE_NAME,
   type AnalysisJobPayload,
+  type EmbeddingJobPayload,
   type IngestionJobPayload,
 } from "@developer-platform/shared";
 import { env } from "./env.js";
@@ -53,4 +55,17 @@ export const analysisQueue = new Queue<AnalysisJobPayload>(ANALYSIS_QUEUE_NAME, 
 
 export async function enqueueAnalysisJob(payload: AnalysisJobPayload): Promise<void> {
   await analysisQueue.add(ANALYSIS_QUEUE_NAME, payload, JOB_OPTIONS);
+}
+
+/**
+ * Phase 5 — same producer/consumer split as ingestion/analysis
+ * (apps/worker/src/jobs/embedding-job.ts is the consumer). Payload is
+ * identifiers only, same constraint as every other queue here.
+ */
+export const embeddingQueue = new Queue<EmbeddingJobPayload>(EMBEDDING_QUEUE_NAME, {
+  connection: queueConnection,
+});
+
+export async function enqueueEmbeddingJob(payload: EmbeddingJobPayload): Promise<void> {
+  await embeddingQueue.add(EMBEDDING_QUEUE_NAME, payload, JOB_OPTIONS);
 }
