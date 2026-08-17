@@ -158,7 +158,9 @@ model Ingestion {
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 
-  files RepositoryFile[]
+  files       RepositoryFile[]
+  /// Phase 4 — at most one, see AnalysisRun's `@@unique([ingestionId])`.
+  analysisRun AnalysisRun?
 
   @@unique([repositoryId, commitSha])
   @@index([repositoryId])
@@ -198,7 +200,248 @@ model RepositoryFile {
 
   createdAt DateTime @default(now())
 
+  // Phase 4 — populated only for SOURCE files that were actually parsed
+  // during an analysis run. See docs/code-intelligence.md.
+  symbols             CodeSymbol[]
+  imports             CodeImport[]
+  resolvedByImports   CodeImport[]     @relation("ResolvedImport")
+  dependencyEdgesOut  DependencyEdge[] @relation("DependencyEdgeSource")
+  dependencyEdgesIn   DependencyEdge[] @relation("DependencyEdgeTarget")
+  metrics             CodeMetric[]
+  findings            Finding[]
+
   @@unique([ingestionId, path])
   @@index([ingestionId])
   @@map("repository_file")
+}
+
+// ---------------------------------------------------------------------------
+// Phase 4 — Code Intelligence & Static Analysis
+//
+// Turns an already-ingested repository's file metadata into real code
+// intelligence: parsed symbols, imports, a resolved dependency graph,
+// deterministic metrics, and deterministic (never AI-generated) findings.
+// See packages/code-analysis/src/analysis and docs/code-intelligence.md.
+// ---------------------------------------------------------------------------
+
+/// Explicit analysis state machine, named to match Ingestion's convention.
+/// Transitions are owned entirely by apps/worker — never client-settable.
+enum AnalysisStatus {
+  PENDING
+  QUEUED
+  PARSING
+  INDEXING
+  ANALYZING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+/// One attempt at turning an ingestion's file metadata into code
+/// intelligence. One-to-one with its Ingestion (`@@unique([ingestionId])`)
+/// — an ingestion is already pinned to a single commit, so re-requesting
+/// analysis for the same ingestion reuses (and retries) this same row,
+/// mirroring Ingestion's own idempotency-by-reuse pattern for commits.
+model AnalysisRun {
+  id          String    @id @default(cuid())
+  ingestionId String    @unique
+  ingestion   Ingestion @relation(fields: [ingestionId], references: [id], onDelete: Cascade)
+
+  status AnalysisStatus @default(PENDING)
+  error  String?
+
+  filesAnalyzed Int?
+  symbolsFound  Int?
+  importsFound  Int?
+  findingsCount Int?
+
+  startedAt   DateTime?
+  completedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  symbols         CodeSymbol[]
+  imports         CodeImport[]
+  dependencyEdges DependencyEdge[]
+  metrics         CodeMetric[]
+  findings        Finding[]
+
+  @@index([ingestionId])
+  @@map("analysis_run")
+}
+
+/// Mirrors packages/code-analysis's SymbolKind — duplicated, not imported,
+/// for the same dependency-free reason as FileCategory above.
+enum SymbolKind {
+  FUNCTION
+  METHOD
+  CLASS
+  INTERFACE
+  TYPE
+  ENUM
+  VARIABLE
+  CONSTANT
+  MODULE
+}
+
+/// A function, class, method, ... discovered in one file during one
+/// analysis run. Real AST-derived for TypeScript/JavaScript, heuristic
+/// (regex/line-based) for Python/Java/C++/Go — see
+/// packages/code-analysis/src/analysis and docs/code-intelligence.md.
+model CodeSymbol {
+  id            String      @id @default(cuid())
+  analysisRunId String
+  analysisRun   AnalysisRun @relation(fields: [analysisRunId], references: [id], onDelete: Cascade)
+  fileId        String
+  file          RepositoryFile @relation(fields: [fileId], references: [id], onDelete: Cascade)
+
+  name      String
+  kind      SymbolKind
+  startLine Int
+  endLine   Int
+  exported  Boolean
+  signature String?
+
+  /// Self-relation to an enclosing symbol in the same file (e.g. a method's
+  /// class), resolved at persistence time from the parser's name-based
+  /// `parentName` — nullable, since most symbols have no parent.
+  parentId String?
+  parent   CodeSymbol?  @relation("SymbolParent", fields: [parentId], references: [id], onDelete: SetNull)
+  children CodeSymbol[] @relation("SymbolParent")
+
+  /// McCabe cyclomatic complexity — only populated for AST-parsed
+  /// (TypeScript/JavaScript) FUNCTION/METHOD symbols, `null` everywhere else.
+  complexity     Int?
+  parameterCount Int?
+
+  createdAt DateTime @default(now())
+
+  @@index([analysisRunId])
+  @@index([fileId])
+  @@map("code_symbol")
+}
+
+/// Mirrors packages/code-analysis's ImportKind.
+enum ImportKind {
+  IMPORT
+  REQUIRE
+  DYNAMIC_IMPORT
+  INCLUDE
+}
+
+/// One import/require/include statement found in one file, exactly as
+/// written. Resolution into a same-repository target (or "external") is a
+/// separate, derived concept — see DependencyEdge below.
+model CodeImport {
+  id            String      @id @default(cuid())
+  analysisRunId String
+  analysisRun   AnalysisRun @relation(fields: [analysisRunId], references: [id], onDelete: Cascade)
+  fileId        String
+  file          RepositoryFile @relation(fields: [fileId], references: [id], onDelete: Cascade)
+
+  source String
+  kind   ImportKind
+  line   Int
+
+  /// The same-repository file this import resolves to, if any — only ever
+  /// set for TypeScript/JavaScript relative imports (see
+  /// packages/code-analysis/src/analysis/dependency-graph.ts); `null` for
+  /// every external package and every heuristically-parsed language.
+  resolvedFileId String?
+  resolvedFile   RepositoryFile? @relation("ResolvedImport", fields: [resolvedFileId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  @@index([analysisRunId])
+  @@index([fileId])
+  @@map("code_import")
+}
+
+/// The resolved, file-to-file dependency graph for one analysis run — one
+/// row per import edge (not deduplicated across multiple import statements
+/// between the same two files; a deliberate Phase 4 simplification, see
+/// docs/code-intelligence.md). `targetFileId` is `null` for an external
+/// (or unresolved) dependency.
+model DependencyEdge {
+  id            String      @id @default(cuid())
+  analysisRunId String
+  analysisRun   AnalysisRun @relation(fields: [analysisRunId], references: [id], onDelete: Cascade)
+
+  sourceFileId String
+  sourceFile   RepositoryFile @relation("DependencyEdgeSource", fields: [sourceFileId], references: [id], onDelete: Cascade)
+  targetFileId String?
+  targetFile   RepositoryFile? @relation("DependencyEdgeTarget", fields: [targetFileId], references: [id], onDelete: Cascade)
+
+  external  Boolean
+  kind      ImportKind
+  specifier String
+
+  createdAt DateTime @default(now())
+
+  @@index([analysisRunId])
+  @@index([sourceFileId])
+  @@map("dependency_edge")
+}
+
+/// Deterministic per-file metrics for one analysis run — see
+/// packages/code-analysis/src/analysis/metrics.ts for exactly how each
+/// count is defined.
+model CodeMetric {
+  id            String      @id @default(cuid())
+  analysisRunId String
+  analysisRun   AnalysisRun @relation(fields: [analysisRunId], references: [id], onDelete: Cascade)
+  fileId        String
+  file          RepositoryFile @relation(fields: [fileId], references: [id], onDelete: Cascade)
+
+  lineCount        Int
+  codeLineCount    Int
+  commentLineCount Int
+  blankLineCount   Int
+  functionCount    Int
+  classCount       Int
+  importCount      Int
+  exportCount      Int
+  /// Sum of the file's function/method complexities — `null` for files
+  /// that aren't AST-parsed (see CodeMetrics's doc comment in
+  /// packages/code-analysis).
+  complexity Int?
+
+  createdAt DateTime @default(now())
+
+  @@unique([analysisRunId, fileId])
+  @@index([analysisRunId])
+  @@map("code_metric")
+}
+
+enum Severity {
+  INFO
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+/// A deterministic static-analysis finding — never AI-generated (see
+/// packages/code-analysis/src/analysis/rules). `fileId` is nullable so the
+/// schema doesn't assume every possible rule is file-scoped, even though
+/// every rule Phase 4 ships today is.
+model Finding {
+  id            String      @id @default(cuid())
+  analysisRunId String
+  analysisRun   AnalysisRun @relation(fields: [analysisRunId], references: [id], onDelete: Cascade)
+  fileId        String?
+  file          RepositoryFile? @relation(fields: [fileId], references: [id], onDelete: Cascade)
+
+  ruleId   String
+  severity Severity
+  message  String
+  line     Int?
+  column   Int?
+  metadata Json?
+
+  createdAt DateTime @default(now())
+
+  @@index([analysisRunId])
+  @@index([fileId])
+  @@map("finding")
 }

@@ -11,6 +11,7 @@ import { registerHealthRoute } from "./routes/health.js";
 import { registerAuthRoutes } from "./routes/auth.js";
 import { registerRepositoryRoutes } from "./routes/repositories.js";
 import { registerIngestionRoutes } from "./routes/ingestions.js";
+import { registerAnalysisRoutes } from "./routes/analyses.js";
 
 /**
  * Builds (but does not start listening on) the Fastify instance. Kept
@@ -70,6 +71,7 @@ export function buildApp(): FastifyInstance {
   registerAuthRoutes(app);
   registerRepositoryRoutes(app);
   registerIngestionRoutes(app);
+  registerAnalysisRoutes(app);
 
   return app;
 }

@@ -181,6 +181,9 @@ importers:
       tar:
         specifier: ^7.4.3
         version: 7.5.22
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
     devDependencies:
       '@developer-platform/config':
         specifier: workspace:*
@@ -194,9 +197,6 @@ importers:
       tsx:
         specifier: ^4.19.2
         version: 4.23.12
-      typescript:
-        specifier: ^5.7.2
-        version: 5.9.3
       vitest:
         specifier: ^2.1.8
         version: 2.1.9(@types/node@22.20.1)(lightningcss@1.32.0)
@@ -214,13 +214,14 @@ importers:
         version: 2.1.9(@types/node@22.20.1)(lightningcss@1.32.0)
 
   packages/code-analysis:
+    dependencies:
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
     devDependencies:
       '@developer-platform/config':
         specifier: workspace:*
         version: link:../config
-      typescript:
-        specifier: ^5.7.2
-        version: 5.9.3
       vitest:
         specifier: ^2.1.8
         version: 2.1.9(@types/node@22.20.1)(lightningcss@1.32.0)

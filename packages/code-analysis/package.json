@@ -14,9 +14,11 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --passWithNoTests"
   },
+  "dependencies": {
+    "typescript": "^5.7.2"
+  },
   "devDependencies": {
     "@developer-platform/config": "workspace:*",
-    "typescript": "^5.7.2",
     "vitest": "^2.1.8"
   }
 }

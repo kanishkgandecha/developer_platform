@@ -1,35 +1,44 @@
 # Development
 
-## What's actually implemented (Phases 1–3)
+## What's actually implemented (Phases 1–4)
 
 - `apps/web` — Next.js: `/login` (GitHub sign-in), an authenticated dashboard (`/`), a
   repository workspace (`/repositories` — sync from GitHub, search, remove, real ingestion
-  status), a repository detail page (`/repositories/[id]` — "Analyze Repository", live progress,
-  file counts on completion), and a `/status` page showing live
+  status), a repository detail page (`/repositories/[id]` — ingestion status/progress, a "Code
+  Intelligence" panel to analyze the repository once ingested), an analysis detail page
+  (`/repositories/[id]/analyses/[analysisId]` — severity summary, filterable/paginated findings
+  table, a file-level code explorer), and a `/status` page showing live
   API/Postgres/Redis/worker/GitHub-OAuth health.
 - `apps/api` — Fastify: `GET /health`; GitHub OAuth (`/auth/github`, `/auth/github/callback`,
   `/auth/logout`, `/auth/me`, `/auth/status`); authenticated repository endpoints
   (`GET /repositories`, `GET/DELETE /repositories/:id`, `POST /repositories/connect`);
   authenticated ingestion endpoints (`POST /repositories/:id/ingestions`,
-  `GET /repositories/:id/ingestions`, `GET /ingestions/:id`); session middleware, rate limiting,
-  structured logging, centralized error handling.
-- `apps/worker` — BullMQ workers for `test` (proves the queue round trip) and
-  `repository-ingestion` (Phase 3's real pipeline — see
-  [repository-ingestion.md](./repository-ingestion.md)); a Redis heartbeat the API's `/health`
-  reads to report real (not hardcoded) worker liveness.
+  `GET /repositories/:id/ingestions`, `GET /ingestions/:id`); authenticated analysis endpoints
+  (`POST /repositories/:id/analyses`, `GET /repositories/:id/analyses`, `GET /analyses/:id`,
+  `GET /analyses/:id/findings`, `GET /analyses/:id/files`, `GET /analyses/:id/files/:fileId`);
+  session middleware, rate limiting, structured logging, centralized error handling.
+- `apps/worker` — BullMQ workers for `test` (proves the queue round trip), `repository-ingestion`
+  (Phase 3's pipeline — see [repository-ingestion.md](./repository-ingestion.md)), and
+  `code-analysis` (Phase 4's pipeline — see [code-intelligence.md](./code-intelligence.md)); a
+  Redis heartbeat the API's `/health` reads to report real (not hardcoded) worker liveness.
 - `packages/database` — Prisma + pgvector. Models: `HealthCheck` (Phase 1); `User`,
-  `GitHubAccount`, `Session`, `Repository` (Phase 2); `Ingestion`, `RepositoryFile` (Phase 3) —
+  `GitHubAccount`, `Session`, `Repository` (Phase 2); `Ingestion`, `RepositoryFile` (Phase 3);
+  `AnalysisRun`, `CodeSymbol`, `CodeImport`, `DependencyEdge`, `CodeMetric`, `Finding` (Phase 4) —
   see [database.md](./database.md).
 - `packages/shared` — the environment schema (Zod), `HealthStatus`, auth DTOs
   (`AuthenticatedUser`, `AuthStatus`, cookie name constants), `RepositoryDto`, ingestion DTOs
-  (`IngestionDto`, `IngestionStatus`, the ingestion queue name/payload type), and the AES-256-GCM
-  crypto implementation shared between `apps/api` and `apps/worker`.
+  (`IngestionDto`, `IngestionStatus`, the ingestion queue name/payload type), analysis DTOs
+  (`AnalysisRunDto`, `FindingDto`, `CodeSymbolDto`, `CodeImportDto`, `CodeMetricDto`, the analysis
+  queue name/payload type), and the AES-256-GCM crypto implementation shared between `apps/api`
+  and `apps/worker`.
 - `packages/code-analysis` — file classification, ignore rules, and the extension→language map
-  (Phase 3).
+  (Phase 3); AST parsing (TypeScript/JavaScript via the TypeScript compiler API), heuristic
+  parsing (Python/Java/C++/Go), metrics, dependency-graph resolution, and a five-rule
+  deterministic rule engine (Phase 4) — see [code-intelligence.md](./code-intelligence.md).
 - `packages/ai` — still an empty placeholder; populated starting Phase 5.
 
-No embeddings, AI agents, findings, or chat exist yet — see
-[architecture.md](./architecture.md)'s phased roadmap.
+No embeddings, AI agents, or chat exist yet — see [architecture.md](./architecture.md)'s phased
+roadmap. Every finding today is deterministic, rule-engine output, never AI-generated.
 
 ## Prerequisites
 
@@ -96,7 +105,8 @@ Or scope to one app: `pnpm --filter @developer-platform/api dev`.
   reads for `/health`. As of Phase 3, `apps/api` also **enqueues** BullMQ jobs onto the
   `repository-ingestion` queue (`apps/api/src/queue.ts`) that `apps/worker` consumes
   (`apps/worker/src/jobs/ingestion-job.ts`) — the first real producer/consumer pairing between the
-  two processes.
+  two processes. Phase 4 adds a second, identically-shaped pair: the `code-analysis` queue
+  (`apps/api/src/queue.ts`'s `enqueueAnalysisJob`, `apps/worker/src/jobs/analysis-job.ts`).
 
 ## Environment variables
 
@@ -133,7 +143,7 @@ local Postgres/Redis.
 apps/{web,api,worker}        deployable applications
 packages/database             Prisma schema + client (the only thing that talks to Postgres directly)
 packages/shared                cross-cutting types/DTOs, env validation, crypto — safe to import anywhere
-packages/code-analysis          file classification, ignore rules, language map (Phase 3+)
+packages/code-analysis          file classification (Phase 3); AST/heuristic parsing, symbols, dependency graph, rules (Phase 4)
 packages/ai                      empty — populated starting Phase 5
 packages/config                 shared eslint/tsconfig/prettier, not runtime code
 ```
@@ -145,6 +155,7 @@ packages/config                 shared eslint/tsconfig/prettier, not runtime cod
 (`packages/shared/src/index.ts`'s `export * from`). Type-only re-exports through the same barrel
 are fine, and `apps/api`/`apps/worker` import the barrel's values without issue (they bundle with
 tsup/esbuild, not Turbopack). The fix: value exports `apps/web` needs are also exposed as a direct
-package subpath (see `packages/shared/package.json`'s `"exports"` map — `/auth`, `/ingestion`) and
-imported from there instead of the barrel — see the comment in `apps/web/src/lib/api.ts`. This
-came up again in Phase 3 (`isActiveIngestionStatus`) and was fixed the same way.
+package subpath (see `packages/shared/package.json`'s `"exports"` map — `/auth`, `/ingestion`,
+`/analysis`) and imported from there instead of the barrel — see the comment in
+`apps/web/src/lib/api.ts`. This came up again in Phase 3 (`isActiveIngestionStatus`) and again in
+Phase 4 (`isActiveAnalysisStatus`), fixed the same way both times.

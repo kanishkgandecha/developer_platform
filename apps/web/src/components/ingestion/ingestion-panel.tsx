@@ -86,13 +86,14 @@ export function IngestionPanel({
     <Card>
       <CardHeader>
         <div className="flex items-center justify-between">
-          <CardTitle>Analysis</CardTitle>
+          {/* "Ingestion", not "Analysis" — Phase 4 introduces a real, separate Code Intelligence analysis step below, and reusing this word for both was confusing. */}
+          <CardTitle>Repository Ingestion</CardTitle>
           <IngestionStatusBadge status={ingestion?.status ?? null} />
         </div>
         <CardDescription>
           {ingestion
             ? `Commit ${ingestion.commitSha.slice(0, 7)}`
-            : "Not analyzed yet — this only discovers and classifies files, no code is executed."}
+            : "Not ingested yet — this only discovers and classifies files, no code is executed."}
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">

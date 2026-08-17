@@ -1,6 +1,11 @@
 import { Queue } from "bullmq";
 import { Redis } from "ioredis";
-import { INGESTION_QUEUE_NAME, type IngestionJobPayload } from "@developer-platform/shared";
+import {
+  ANALYSIS_QUEUE_NAME,
+  INGESTION_QUEUE_NAME,
+  type AnalysisJobPayload,
+  type IngestionJobPayload,
+} from "@developer-platform/shared";
 import { env } from "./env.js";
 
 /**
@@ -18,6 +23,13 @@ queueConnection.on("error", (error) => {
   }
 });
 
+const JOB_OPTIONS = {
+  attempts: 3,
+  backoff: { type: "exponential" as const, delay: 1000 },
+  removeOnComplete: { age: 3600, count: 1000 },
+  removeOnFail: { age: 86400 },
+};
+
 /**
  * Producer only — apps/api enqueues ingestion jobs, apps/worker consumes
  * them (apps/worker/src/jobs/ingestion-job.ts). Same queue name, same
@@ -27,13 +39,18 @@ export const ingestionQueue = new Queue<IngestionJobPayload>(INGESTION_QUEUE_NAM
   connection: queueConnection,
 });
 
-const INGESTION_JOB_OPTIONS = {
-  attempts: 3,
-  backoff: { type: "exponential" as const, delay: 1000 },
-  removeOnComplete: { age: 3600, count: 1000 },
-  removeOnFail: { age: 86400 },
-};
-
 export async function enqueueIngestionJob(payload: IngestionJobPayload): Promise<void> {
-  await ingestionQueue.add(INGESTION_QUEUE_NAME, payload, INGESTION_JOB_OPTIONS);
+  await ingestionQueue.add(INGESTION_QUEUE_NAME, payload, JOB_OPTIONS);
+}
+
+/**
+ * Phase 4 — same producer/consumer split as ingestion (apps/worker/src/jobs/analysis-job.ts
+ * is the consumer). Payload is identifiers only, same constraint as ingestion.
+ */
+export const analysisQueue = new Queue<AnalysisJobPayload>(ANALYSIS_QUEUE_NAME, {
+  connection: queueConnection,
+});
+
+export async function enqueueAnalysisJob(payload: AnalysisJobPayload): Promise<void> {
+  await analysisQueue.add(ANALYSIS_QUEUE_NAME, payload, JOB_OPTIONS);
 }

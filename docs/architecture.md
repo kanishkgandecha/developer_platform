@@ -4,12 +4,14 @@
 
 Developer Platform ingests a GitHub repository, indexes it, runs specialized AI agents over it, and
 surfaces the results as an evidence-backed engineering dashboard with a RAG-based repo assistant.
-This document covers the system as approved for the full build. **Phases 1–3 are implemented**
-(foundation, then GitHub OAuth + repository access, then repository ingestion) — see
-[development.md](./development.md) for what's actually running today,
+This document covers the system as approved for the full build. **Phases 1–4 are implemented**
+(foundation, then GitHub OAuth + repository access, then repository ingestion, then deterministic
+code intelligence) — see [development.md](./development.md) for what's actually running today,
 [authentication.md](./authentication.md) / [github-integration.md](./github-integration.md) for
-sign-in and GitHub access, and [repository-ingestion.md](./repository-ingestion.md) for how a
-repository becomes scanned, classified file metadata.
+sign-in and GitHub access, [repository-ingestion.md](./repository-ingestion.md) for how a
+repository becomes scanned, classified file metadata, and
+[code-intelligence.md](./code-intelligence.md) for how that metadata becomes parsed symbols,
+imports, a dependency graph, and deterministic findings.
 
 ```
                  ┌────────────┐
@@ -26,7 +28,7 @@ repository becomes scanned, classified file metadata.
                         │ enqueue jobs └──────┬───────┘
                  ┌─────▼──────┐               │
                  │apps/worker │◀──────────────┘
-                 │ BullMQ     │  ingestion → chunk/embed → 7 agents (parallel) → aggregate
+                 │ BullMQ     │  ingestion → code analysis → chunk/embed → 7 agents (parallel) → aggregate
                  │ consumers  │
                  └─────┬──────┘
                         │
@@ -55,7 +57,7 @@ developer-platform/
 ├── packages/
 │   ├── database/             Prisma schema, migrations, generated client
 │   ├── ai/                     OpenAI client, agent prompts, Zod schemas, structured-output validation (still empty — Phase 5+)
-│   ├── code-analysis/           file classification, ignore rules, language map (Phase 3); chunking/manifest parsers land in Phase 4
+│   ├── code-analysis/           file classification (Phase 3); AST/heuristic parsing, symbols, imports, dependency graph, deterministic rules (Phase 4)
 │   ├── shared/                   shared TS types, Zod DTOs, env schema, AES-256-GCM crypto
 │   └── config/                    shared eslint/tsconfig/prettier config
 ├── docker/                  per-app Dockerfiles
@@ -83,8 +85,16 @@ transpiles them via Next's `transpilePackages`, and `apps/api`/`apps/worker` bun
   caps on entry count/size (zip-bomb protection) and independently re-validated path safety
   (traversal/symlink rejection) — see [repository-ingestion.md](./repository-ingestion.md). No
   `.git` hooks ever execute; no repository code is ever run, anywhere in the pipeline.
-- **Chunking — tree-sitter AST boundaries with a heuristic fallback** for languages without a
-  grammar in the initial set (TS/JS, Python, Go, Java, Rust).
+- **Phase 4 parsing — the TypeScript compiler API, not tree-sitter, for TS/JS.** Real, native,
+  dependency-free (pure JS/TS, no native bindings/Docker build risk) syntax-only parsing
+  (`ts.createSourceFile`, no type checking) for the languages that matter most in this stack;
+  Python/Java/C++/Go get honest, clearly-labeled heuristic (regex/line-based) extraction instead of
+  a "fake AST" — see [code-intelligence.md](./code-intelligence.md) for the full writeup and its
+  documented limitations.
+- **Embedding chunking (Phase 5+, still future) — tree-sitter AST boundaries with a heuristic
+  fallback** for languages without a grammar in the initial set. A distinct concern from Phase 4's
+  symbol/import extraction above: this is about splitting file content into embedding-sized chunks,
+  not about producing a `CodeSymbol`/`CodeImport` graph.
 - **Deterministic vs. LLM-derived data.** Dependency manifests are parsed deterministically into
   `RepositoryDependency`; the Dependency Agent reasons over that real data instead of hallucinating
   package lists or CVEs.
@@ -103,9 +113,11 @@ transpiles them via Next's `transpilePackages`, and `apps/api`/`apps/worker` bun
 
 Implemented so far: `HealthCheck` (Phase 1 placeholder); `User`, `GitHubAccount`, `Session`,
 `Repository` (Phase 2); `Ingestion`, `RepositoryFile` (Phase 3 — metadata only, no repository
-content). Still to come: `RepositoryDependency`, `CodeChunk` (pgvector embedding), `AnalysisRun`,
-`AnalysisJob`, `AgentResult`, `Finding`, `ChatSession`, `ChatMessage` — added only in the phases
-that actually need them, per this project's own "no premature schema" principle.
+content); `AnalysisRun`, `CodeSymbol`, `CodeImport`, `DependencyEdge`, `CodeMetric`, `Finding`
+(Phase 4 — deterministic code intelligence, extending `RepositoryFile` rather than duplicating file
+metadata into a new model). Still to come: `RepositoryDependency`, `CodeChunk` (pgvector embedding),
+`AnalysisJob`, `AgentResult`, `ChatSession`, `ChatMessage` — added only in the phases that actually
+need them, per this project's own "no premature schema" principle.
 
 ## Phased roadmap
 
@@ -116,10 +128,14 @@ that actually need them, per this project's own "no premature schema" principle.
 3. ✅ **Repository ingestion** — tarball fetch, sandboxed extraction, file classification, an
    ingestion state machine and BullMQ queue, real progress in the UI. See
    [repository-ingestion.md](./repository-ingestion.md).
-4. Code intelligence — tree-sitter chunking, embeddings, pgvector search.
-5. Agent framework + Architecture Agent + Security Agent.
-6. Remaining five agents (Bug, Code Quality, Testing, Dependency, Documentation).
-7. Job system + real-time progress (BullMQ FlowProducer, SSE).
-8. Findings UI, code viewer, architecture visualization, repo chat (RAG).
-9. Testing, observability, security hardening.
-10. Polish — README, docs, demo data, deployment.
+4. ✅ **Code intelligence** — AST parsing (TypeScript/JavaScript) and heuristic parsing
+   (Python/Java/C++/Go), symbol/import extraction, a resolved dependency graph, deterministic
+   metrics, and five rule-engine findings — no AI. See
+   [code-intelligence.md](./code-intelligence.md).
+5. Embeddings + pgvector search (RAG foundation) — tree-sitter-based chunking lands here.
+6. Agent framework + Architecture Agent + Security Agent.
+7. Remaining five agents (Bug, Code Quality, Testing, Dependency, Documentation).
+8. Job system + real-time progress (BullMQ FlowProducer, SSE).
+9. Findings UI, code viewer, architecture visualization, repo chat (RAG).
+10. Testing, observability, security hardening.
+11. Polish — README, docs, demo data, deployment.

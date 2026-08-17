@@ -18,6 +18,7 @@ async function main(): Promise<void> {
   const { checkDatabaseConnection } = await import("@developer-platform/database");
   const { startTestWorker } = await import("./jobs/test-job.js");
   const { startIngestionWorker } = await import("./jobs/ingestion-job.js");
+  const { startAnalysisWorker } = await import("./jobs/analysis-job.js");
   const { startHeartbeat, stopHeartbeat } = await import("./heartbeat.js");
 
   const redisOk = await checkRedisConnection();
@@ -36,9 +37,10 @@ async function main(): Promise<void> {
 
   const testWorker = startTestWorker();
   const ingestionWorker = startIngestionWorker();
-  await Promise.all([testWorker.waitUntilReady(), ingestionWorker.waitUntilReady()]);
+  const analysisWorker = startAnalysisWorker();
+  await Promise.all([testWorker.waitUntilReady(), ingestionWorker.waitUntilReady(), analysisWorker.waitUntilReady()]);
   logger.info(
-    { queues: [testWorker.name, ingestionWorker.name] },
+    { queues: [testWorker.name, ingestionWorker.name, analysisWorker.name] },
     "worker ready and listening for jobs",
   );
 
@@ -48,7 +50,7 @@ async function main(): Promise<void> {
   async function shutdown(signal: string): Promise<void> {
     logger.info(`received ${signal}, shutting down`);
     stopHeartbeat();
-    await Promise.all([testWorker.close(), ingestionWorker.close()]);
+    await Promise.all([testWorker.close(), ingestionWorker.close(), analysisWorker.close()]);
     await closeRedisConnection();
     process.exit(0);
   }
