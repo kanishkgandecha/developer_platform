@@ -4,18 +4,24 @@ import { prisma } from "@developer-platform/database";
 import type { AnalysisRun, Ingestion } from "@prisma/client";
 import {
   ACTIVE_INGESTION_STATUSES,
+  isStaleActiveRun,
   type IngestionDto,
   type IngestionStatus,
 } from "@developer-platform/shared";
 import { requireAuth } from "../plugins/auth.js";
 import { enqueueIngestionJob } from "../queue.js";
 import { decryptToken } from "../services/crypto.js";
+import { env } from "../env.js";
 import { GitHubApiError, getBranchHeadSha } from "../services/github.js";
 import { toAnalysisRunDto } from "./analyses.js";
 
 const repositoryIdParamsSchema = z.object({
   id: z.string().cuid("Invalid repository id"),
 });
+
+// Safety cap for the run-history list endpoints (this file, analyses.ts,
+// embeddings.ts, ai-analysis.ts) — see the comment at each `take:` use.
+const RUN_HISTORY_LIMIT = 100;
 
 const ingestionIdParamsSchema = z.object({
   id: z.string().cuid("Invalid ingestion id"),
@@ -114,7 +120,14 @@ export function registerIngestionRoutes(app: FastifyInstance): void {
         where: { repositoryId_commitSha: { repositoryId: repository.id, commitSha } },
       });
 
-      if (existing && ACTIVE_INGESTION_STATUSES.includes(existing.status as IngestionStatus)) {
+      // A run stuck in an active status well past a reasonable timeout is
+      // treated as orphaned (its worker likely crashed) rather than
+      // blocking retries forever — see packages/shared/src/job-staleness.ts.
+      if (
+        existing &&
+        ACTIVE_INGESTION_STATUSES.includes(existing.status as IngestionStatus) &&
+        !isStaleActiveRun(existing.updatedAt, env.STALE_ACTIVE_RUN_MINUTES)
+      ) {
         return reply.code(409).send({
           error: { message: "An ingestion for this commit is already in progress", statusCode: 409 },
           ingestion: toIngestionDto(existing),
@@ -173,6 +186,13 @@ export function registerIngestionRoutes(app: FastifyInstance): void {
       where: { repositoryId: repository.id },
       orderBy: { createdAt: "desc" },
       include: ANALYSIS_RUN_INCLUDE,
+      // Distinct rows accrue one per re-ingested commit over a repository's
+      // whole lifetime (unlike the reuse-by-id pattern, which only dedupes
+      // *within* one commit) — an unbounded fetch here is unlikely to be hit
+      // today (no UI currently renders this list; it exists for API
+      // completeness) but is a needless unbounded query as written. A flat
+      // cap is enough; this isn't a paginated view, so no page/pageSize UI.
+      take: RUN_HISTORY_LIMIT,
     });
 
     return reply.send({ ingestions: ingestions.map(toIngestionDto) });
