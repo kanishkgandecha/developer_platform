@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { createEmbeddingProviderFromEnv } from "@developer-platform/ai";
+import { createEmbeddingProviderFromEnv, EmbeddingProviderError } from "@developer-platform/ai";
 import type { ChunkableSymbol } from "@developer-platform/code-analysis";
 import { prisma } from "@developer-platform/database";
 import type { EmbeddingJobPayload, EmbeddingRunStatus } from "@developer-platform/shared";
@@ -27,15 +27,34 @@ function errorCategoryFor(error: unknown): string {
   if (error instanceof GitHubArchiveError) return "github_archive";
   if (error instanceof ExtractionLimitError) return `extraction_limit:${error.reason}`;
   if (error instanceof UnsafeArchivePathError) return "unsafe_archive_path";
+  if (error instanceof EmbeddingProviderError) return `embedding_provider:${error.retryable ? "retryable" : "non_retryable"}`;
   return "unknown";
 }
 
-/** Same permanent-vs-transient split as the analysis pipeline, for the same reasons — plus "embedding isn't configured," which is always permanent (retrying without a key can never succeed). */
+/**
+ * Same permanent-vs-transient split as the analysis pipeline, for the same
+ * reasons — plus "embedding isn't configured," which is always permanent
+ * (retrying without a key can never succeed).
+ *
+ * `EmbeddingProviderError` is always treated as permanent *here*, even
+ * though some instances started out as a transient-looking failure
+ * (`retryable: true` — 429/5xx) — the provider itself
+ * (`createOpenAIEmbeddingProvider`) already retried the request internally
+ * (bounded, with backoff) before ever throwing this. Letting BullMQ retry
+ * the *whole job* on top of that (re-download the archive, re-chunk, call
+ * the provider again — which retries 3 more times on its own) triples the
+ * wasted OpenAI calls for a failure mode (rate limiting, or — as seen in
+ * practice — an account with no billing/quota configured) that isn't going
+ * to resolve itself within a job retry's timeframe. Fail clearly once, let
+ * the user retry manually via "Re-index Repository" after fixing the
+ * underlying OpenAI account issue.
+ */
 function isPermanentError(error: unknown): boolean {
   if (error instanceof UnsafeArchivePathError) return true;
   if (error instanceof ExtractionLimitError) return true;
   if (error instanceof GitHubArchiveError) return error.status === 404 || error.status === 401;
   if (error instanceof EmbeddingNotConfiguredError) return true;
+  if (error instanceof EmbeddingProviderError) return true;
   return false;
 }
 
@@ -65,6 +84,9 @@ export function userFacingMessageFor(error: unknown): string {
   }
   if (error instanceof EmbeddingNotConfiguredError) {
     return error.message;
+  }
+  if (error instanceof EmbeddingProviderError) {
+    return "OpenAI embedding request failed — check that OPENAI_API_KEY is valid and the OpenAI account has available quota/billing configured, then try again";
   }
   return "Semantic indexing failed unexpectedly";
 }
