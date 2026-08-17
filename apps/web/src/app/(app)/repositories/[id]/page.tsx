@@ -1,9 +1,10 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ExternalLink, Lock } from "lucide-react";
-import type { RepositoryDto } from "@developer-platform/shared";
+import type { EmbeddingRunDto, RepositoryDto } from "@developer-platform/shared";
 import { Badge } from "@/components/ui/badge";
 import { AnalysisPanel } from "@/components/analysis/analysis-panel";
+import { EmbeddingPanel } from "@/components/embedding/embedding-panel";
 import { IngestionPanel } from "@/components/ingestion/ingestion-panel";
 import { Reveal } from "@/components/motion/reveal";
 import { requireUser } from "@/lib/auth";
@@ -22,6 +23,14 @@ async function getRepository(id: string): Promise<RepositoryDto | null> {
   return (await response.json()) as RepositoryDto;
 }
 
+/** Best-effort — a repository that's never been indexed simply has no embedding runs yet, not an error. */
+async function getLatestEmbedding(repositoryId: string): Promise<EmbeddingRunDto | null> {
+  const response = await serverFetch(`/repositories/${repositoryId}/embeddings`);
+  if (!response.ok) return null;
+  const body = (await response.json()) as { embeddings: EmbeddingRunDto[] };
+  return body.embeddings[0] ?? null;
+}
+
 export default async function RepositoryDetailPage({ params }: PageProps<"/repositories/[id]">) {
   await requireUser();
   const { id } = await params;
@@ -30,6 +39,8 @@ export default async function RepositoryDetailPage({ params }: PageProps<"/repos
   if (!repository) {
     notFound();
   }
+
+  const latestEmbedding = await getLatestEmbedding(repository.id);
 
   return (
     <div className="flex flex-col gap-6">
@@ -67,6 +78,14 @@ export default async function RepositoryDetailPage({ params }: PageProps<"/repos
 
       <Reveal delay={0.12}>
         <AnalysisPanel repositoryId={repository.id} ingestion={repository.latestIngestion} />
+      </Reveal>
+
+      <Reveal delay={0.18}>
+        <EmbeddingPanel
+          repositoryId={repository.id}
+          analysis={repository.latestIngestion?.latestAnalysis ?? null}
+          initialEmbedding={latestEmbedding}
+        />
       </Reveal>
     </div>
   );
