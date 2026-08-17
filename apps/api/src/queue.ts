@@ -1,9 +1,11 @@
 import { Queue } from "bullmq";
 import { Redis } from "ioredis";
 import {
+  AI_ANALYSIS_QUEUE_NAME,
   ANALYSIS_QUEUE_NAME,
   EMBEDDING_QUEUE_NAME,
   INGESTION_QUEUE_NAME,
+  type AIAnalysisJobPayload,
   type AnalysisJobPayload,
   type EmbeddingJobPayload,
   type IngestionJobPayload,
@@ -68,4 +70,17 @@ export const embeddingQueue = new Queue<EmbeddingJobPayload>(EMBEDDING_QUEUE_NAM
 
 export async function enqueueEmbeddingJob(payload: EmbeddingJobPayload): Promise<void> {
   await embeddingQueue.add(EMBEDDING_QUEUE_NAME, payload, JOB_OPTIONS);
+}
+
+/**
+ * Phase 6 — same producer/consumer split as every other queue here
+ * (apps/worker/src/jobs/ai-analysis-job.ts is the consumer). Payload is
+ * identifiers only — no OpenAI key, no repository content, ever in Redis.
+ */
+export const aiAnalysisQueue = new Queue<AIAnalysisJobPayload>(AI_ANALYSIS_QUEUE_NAME, {
+  connection: queueConnection,
+});
+
+export async function enqueueAIAnalysisJob(payload: AIAnalysisJobPayload): Promise<void> {
+  await aiAnalysisQueue.add(AI_ANALYSIS_QUEUE_NAME, payload, JOB_OPTIONS);
 }

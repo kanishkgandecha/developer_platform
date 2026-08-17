@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { prisma } from "@developer-platform/database";
+import { searchRepository } from "@developer-platform/ai";
 import type { EmbeddingRun } from "@prisma/client";
 import {
   ACTIVE_EMBEDDING_STATUSES,
@@ -13,7 +14,6 @@ import { requireAuth } from "../plugins/auth.js";
 import { enqueueEmbeddingJob } from "../queue.js";
 import { env } from "../env.js";
 import { getEmbeddingProvider } from "../services/embedding-provider.js";
-import { searchRepository } from "../services/search.js";
 
 const repositoryIdParamsSchema = z.object({
   id: z.string().cuid("Invalid repository id"),

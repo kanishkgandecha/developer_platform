@@ -5,8 +5,7 @@ import { dirname, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { checkDatabaseConnection, prisma, toVectorLiteral } from "@developer-platform/database";
 import { chunkFile } from "@developer-platform/code-analysis";
-import { createMockEmbeddingProvider } from "@developer-platform/ai";
-import { searchRepository } from "../../src/services/search.js";
+import { createMockEmbeddingProvider, searchRepository } from "@developer-platform/ai";
 
 /**
  * A small, deterministic, manually-written retrieval evaluation dataset —
@@ -39,7 +38,7 @@ const CORPUS_FILES = [
   "packages/ai/src/embedding/create-provider-from-env.ts",
   "apps/worker/src/services/github-archive.ts",
   "apps/api/src/services/crypto.ts",
-  "apps/api/src/services/search.ts",
+  "packages/ai/src/retrieval/search.ts",
   "apps/worker/src/jobs/ingestion-job.ts",
 ] as const;
 
@@ -62,7 +61,7 @@ const EVAL_QUERIES: EvalQuery[] = [
   { query: "Where is the embedding provider constructed from environment configuration?", expectedFile: "packages/ai/src/embedding/create-provider-from-env.ts" },
   { query: "How is a GitHub repository tarball archive downloaded?", expectedFile: "apps/worker/src/services/github-archive.ts" },
   { query: "Where are GitHub access tokens encrypted with AES-256-GCM?", expectedFile: "apps/api/src/services/crypto.ts" },
-  { query: "How is the hybrid semantic and lexical search score computed?", expectedFile: "apps/api/src/services/search.ts" },
+  { query: "How is the hybrid semantic and lexical search score computed?", expectedFile: "packages/ai/src/retrieval/search.ts" },
   { query: "Where does an ingestion job get enqueued and consumed?", expectedFile: "apps/worker/src/jobs/ingestion-job.ts" },
 ];
 
