@@ -12,18 +12,38 @@ import { serverFetch } from "@/lib/api";
 
 export const dynamic = "force-dynamic";
 
-async function getRepositoryCount(): Promise<number> {
+async function getRepositories(): Promise<RepositoryDto[]> {
   const response = await serverFetch("/repositories");
   if (!response.ok) {
-    return 0;
+    return [];
   }
   const { repositories } = (await response.json()) as { repositories: RepositoryDto[] };
-  return repositories.length;
+  return repositories;
+}
+
+/**
+ * Aggregate, honest counts derived entirely from the fields `GET
+ * /repositories` already returns (`latestIngestion`/`latestAnalysis`
+ * embedded per row) — no extra per-repository requests. Deliberately
+ * limited to what's already on that response: adding embedding/AI-analysis
+ * status here would mean an N+1 fan-out across every repository just to
+ * populate a dashboard summary.
+ */
+function summarize(repositories: RepositoryDto[]) {
+  const ingestedCount = repositories.filter((r) => r.latestIngestion?.status === "COMPLETED").length;
+  const analyzedRepos = repositories.filter((r) => r.latestIngestion?.latestAnalysis?.status === "COMPLETED");
+  const totalFindings = analyzedRepos.reduce(
+    (sum, r) => sum + (r.latestIngestion?.latestAnalysis?.findingsCount ?? 0),
+    0,
+  );
+  return { ingestedCount, analyzedCount: analyzedRepos.length, totalFindings };
 }
 
 export default async function DashboardPage() {
   const user = await requireUser();
-  const repositoryCount = await getRepositoryCount();
+  const repositories = await getRepositories();
+  const repositoryCount = repositories.length;
+  const { ingestedCount, analyzedCount, totalFindings } = summarize(repositories);
 
   return (
     <div className="flex flex-col gap-10">
@@ -40,7 +60,7 @@ export default async function DashboardPage() {
             <p className="max-w-lg text-sm text-muted-foreground md:text-base">
               Connect a GitHub repository and get an evidence-backed engineering
               analysis — architecture, security, code quality, testing, dependencies, and
-              documentation, with a repository assistant to ask questions against it.
+              documentation — plus semantic code search across the indexed source.
             </p>
             <div className="mt-2 flex flex-wrap items-center gap-3">
               <Button nativeButton={false} render={<Link href="/repositories" />}>
@@ -65,11 +85,26 @@ export default async function DashboardPage() {
           </CardHeader>
           <CardContent>
             {repositoryCount > 0 ? (
-              <p className="text-sm text-muted-foreground">
-                {repositoryCount} {repositoryCount === 1 ? "repository" : "repositories"}{" "}
-                connected. Analysis is not implemented yet — repository ingestion and the AI
-                agents land in later phases.
-              </p>
+              <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+                <div>
+                  <p className="text-2xl font-semibold tracking-tight">{repositoryCount}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {repositoryCount === 1 ? "Repository" : "Repositories"} connected
+                  </p>
+                </div>
+                <div>
+                  <p className="text-2xl font-semibold tracking-tight">{ingestedCount}</p>
+                  <p className="text-xs text-muted-foreground">Ingested</p>
+                </div>
+                <div>
+                  <p className="text-2xl font-semibold tracking-tight">{analyzedCount}</p>
+                  <p className="text-xs text-muted-foreground">Analyzed</p>
+                </div>
+                <div>
+                  <p className="text-2xl font-semibold tracking-tight">{totalFindings}</p>
+                  <p className="text-xs text-muted-foreground">Findings from code analysis</p>
+                </div>
+              </div>
             ) : (
               <EmptyState
                 icon={FolderGit2}

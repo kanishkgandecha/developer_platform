@@ -4,6 +4,7 @@ import { prisma } from "@developer-platform/database";
 import type { AnalysisRun, CodeImport, CodeMetric, CodeSymbol, Finding, RepositoryFile } from "@prisma/client";
 import {
   ACTIVE_ANALYSIS_STATUSES,
+  isStaleActiveRun,
   type AnalysisRunDto,
   type AnalysisStatus,
   type CodeImportDto,
@@ -15,10 +16,15 @@ import {
 } from "@developer-platform/shared";
 import { requireAuth } from "../plugins/auth.js";
 import { enqueueAnalysisJob } from "../queue.js";
+import { env } from "../env.js";
 
 const repositoryIdParamsSchema = z.object({
   id: z.string().cuid("Invalid repository id"),
 });
+
+// Safety cap for the run-history list endpoint below — see
+// ingestions.ts's identical constant for the full rationale.
+const RUN_HISTORY_LIMIT = 100;
 
 const analysisIdParamsSchema = z.object({
   id: z.string().cuid("Invalid analysis id"),
@@ -189,7 +195,14 @@ export function registerAnalysisRoutes(app: FastifyInstance): void {
 
       const existing = await prisma.analysisRun.findUnique({ where: { ingestionId: latestIngestion.id } });
 
-      if (existing && ACTIVE_ANALYSIS_STATUSES.includes(existing.status as AnalysisStatus)) {
+      // A run stuck in an active status well past a reasonable timeout is
+      // treated as orphaned (its worker likely crashed) rather than
+      // blocking retries forever — see packages/shared/src/job-staleness.ts.
+      if (
+        existing &&
+        ACTIVE_ANALYSIS_STATUSES.includes(existing.status as AnalysisStatus) &&
+        !isStaleActiveRun(existing.updatedAt, env.STALE_ACTIVE_RUN_MINUTES)
+      ) {
         return reply.code(409).send({
           error: { message: "An analysis for this ingestion is already in progress", statusCode: 409 },
           analysis: toAnalysisRunDto(existing),
@@ -257,6 +270,7 @@ export function registerAnalysisRoutes(app: FastifyInstance): void {
     const analyses = await prisma.analysisRun.findMany({
       where: { ingestion: { repositoryId: repository.id } },
       orderBy: { createdAt: "desc" },
+      take: RUN_HISTORY_LIMIT,
     });
 
     return reply.send({ analyses: analyses.map(toAnalysisRunDto) });

@@ -1,6 +1,6 @@
 # Development
 
-## What's actually implemented (Phases 1–6)
+## What's actually implemented (Phases 1–7)
 
 - `apps/web` — Next.js: `/login` (GitHub sign-in), an authenticated dashboard (`/`), a
   repository workspace (`/repositories` — sync from GitHub, search, remove, real ingestion
@@ -62,13 +62,24 @@
   `src/chat`, `src/agents`) — see [semantic-search.md](./semantic-search.md) and
   [ai-analysis.md](./ai-analysis.md).
 
-No chat UI or autonomous code modification exist yet — see [architecture.md](./architecture.md)'s
-phased roadmap. Every Phase 4 finding is deterministic, rule-engine output, never AI-generated;
+No chat UI or autonomous code modification exist, and neither is planned — see
+[architecture.md](./architecture.md)'s roadmap for what's in and out of scope. Every Phase 4
+finding is deterministic, rule-engine output, never AI-generated;
 Phase 5's only model call is the embedding API itself (never interpreted or summarized by another
 model); Phase 6's seven agents are the first AI-generated, user-facing content in this codebase —
 always structured, Zod-validated, and evidence-cited, never free-form prose trusted blindly. See
 [semantic-search.md](./semantic-search.md) and [ai-analysis.md](./ai-analysis.md) for the full
 scope boundaries.
+
+Phase 7 (V1 completion & hardening) didn't add new product surface area — it's a correctness pass
+over everything above: a stale-run timeout so a crashed worker's job can't block retries forever
+(`packages/shared/src/job-staleness.ts`, `STALE_ACTIVE_RUN_MINUTES`, applied in all four
+`POST .../ingestions|analyses|embeddings|ai-analysis` routes); a safety cap on the four per-run
+history list endpoints, which had no limit; the dashboard's "Engineering Health" card now shows
+real aggregate counts instead of stale placeholder copy; the sidebar no longer lists already-built
+features ("Analyses", "Findings") as disabled/"coming later"; and this documentation set was
+brought back in sync with the real system (removed claims of SSE, a repo-chat assistant, and other
+never-built or no-longer-planned features). See the Phase 7 completion report for the full list.
 
 ## Prerequisites
 

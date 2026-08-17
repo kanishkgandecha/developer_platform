@@ -136,4 +136,14 @@ describe("loadEnv", () => {
   it("rejects an agent concurrency above the sanity ceiling (never unlimited parallel OpenAI requests)", () => {
     expect(() => loadEnv({ ...validEnv, AI_AGENT_CONCURRENCY: "50" })).toThrowError(/AI_AGENT_CONCURRENCY/);
   });
+
+  it("defaults the Phase 7 stale-active-run threshold when unset", () => {
+    const env = loadEnv(validEnv);
+    expect(env.STALE_ACTIVE_RUN_MINUTES).toBe(30);
+  });
+
+  it("coerces and honors an overridden stale-active-run threshold", () => {
+    const env = loadEnv({ ...validEnv, STALE_ACTIVE_RUN_MINUTES: "60" });
+    expect(env.STALE_ACTIVE_RUN_MINUTES).toBe(60);
+  });
 });

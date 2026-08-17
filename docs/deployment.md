@@ -1,21 +1,24 @@
 # Deployment
 
 Planning-level notes for when this moves beyond local Docker Compose. Nothing here is wired up yet
-— Phases 1–3 only target `docker compose up --build` locally.
+— this repository currently targets `docker compose up --build` locally only; see
+[development.md](./development.md) for what's actually running today.
 
 ## Target topology
 
-| Service      | Why                                                              | Reasonable targets                          |
-| ------------ | ----------------------------------------------------------------- | -------------------------------------------- |
-| `apps/web`   | Stateless Next.js, benefits from edge/CDN caching                 | Vercel, or the same host as api/worker       |
-| `apps/api`   | Long-running Fastify process (SSE connections need a live socket) | Fly.io, Railway, Render — not serverless     |
-| `apps/worker`| Long-running BullMQ consumer, can't live in a serverless function | Same host family as `apps/api`               |
-| PostgreSQL   | Needs the `pgvector` extension enabled                            | Neon, Supabase, or Fly Postgres w/ extension |
-| Redis        | Queues, cache, sessions                                           | Upstash, or managed Redis on Fly/Railway     |
+| Service      | Why                                                                | Reasonable targets                          |
+| ------------ | ------------------------------------------------------------------- | -------------------------------------------- |
+| `apps/web`   | Stateless Next.js, benefits from edge/CDN caching                   | Vercel, or the same host as api/worker       |
+| `apps/api`   | Long-running Fastify process, session-authenticated REST            | Fly.io, Railway, Render — not serverless     |
+| `apps/worker`| Long-running BullMQ consumer, can't live in a serverless function   | Same host family as `apps/api`               |
+| PostgreSQL   | Needs the `pgvector` extension enabled                              | Neon, Supabase, or Fly Postgres w/ extension |
+| Redis        | Queues, cache, sessions                                             | Upstash, or managed Redis on Fly/Railway     |
 
-`apps/api` and `apps/worker` specifically cannot run as Vercel serverless functions or similar
-short-lived compute — they need a persistent process (BullMQ workers block waiting for jobs; SSE
-connections stay open for the duration of an analysis run).
+`apps/worker` specifically cannot run as a Vercel serverless function or similar short-lived
+compute — BullMQ workers block waiting for jobs, which needs a persistent process. `apps/api`
+doesn't strictly require one (progress is client-polled REST, not a held-open connection like
+SSE/WebSockets — see [architecture.md](./architecture.md)), but is grouped with `apps/worker` here
+for deployment simplicity, not a hard technical requirement.
 
 ## Environment variables in production
 

@@ -5,6 +5,7 @@ import { searchRepository } from "@developer-platform/ai";
 import type { EmbeddingRun } from "@prisma/client";
 import {
   ACTIVE_EMBEDDING_STATUSES,
+  isStaleActiveRun,
   type EmbeddingRunDto,
   type EmbeddingRunStatus,
   type SemanticSearchResponse,
@@ -18,6 +19,10 @@ import { getEmbeddingProvider } from "../services/embedding-provider.js";
 const repositoryIdParamsSchema = z.object({
   id: z.string().cuid("Invalid repository id"),
 });
+
+// Safety cap for the run-history list endpoint below — see
+// ingestions.ts's identical constant for the full rationale.
+const RUN_HISTORY_LIMIT = 100;
 
 const embeddingIdParamsSchema = z.object({
   id: z.string().cuid("Invalid embedding run id"),
@@ -104,7 +109,14 @@ export function registerEmbeddingRoutes(app: FastifyInstance): void {
 
       const existing = await prisma.embeddingRun.findUnique({ where: { analysisRunId: analysisRun.id } });
 
-      if (existing && ACTIVE_EMBEDDING_STATUSES.includes(existing.status as EmbeddingRunStatus)) {
+      // A run stuck in an active status well past a reasonable timeout is
+      // treated as orphaned (its worker likely crashed) rather than
+      // blocking retries forever — see packages/shared/src/job-staleness.ts.
+      if (
+        existing &&
+        ACTIVE_EMBEDDING_STATUSES.includes(existing.status as EmbeddingRunStatus) &&
+        !isStaleActiveRun(existing.updatedAt, env.STALE_ACTIVE_RUN_MINUTES)
+      ) {
         return reply.code(409).send({
           error: { message: "Semantic indexing for this analysis is already in progress", statusCode: 409 },
           embedding: toEmbeddingRunDto(existing),
@@ -160,6 +172,7 @@ export function registerEmbeddingRoutes(app: FastifyInstance): void {
     const embeddings = await prisma.embeddingRun.findMany({
       where: { repositoryId: repository.id },
       orderBy: { createdAt: "desc" },
+      take: RUN_HISTORY_LIMIT,
     });
 
     return reply.send({ embeddings: embeddings.map(toEmbeddingRunDto) });

@@ -149,6 +149,20 @@ describe.runIf(dbAvailable)("AI analysis (live database)", () => {
       expect(count).toBe(1);
     });
 
+    it("treats a run stuck 'active' well past the staleness threshold as retryable instead of blocking forever", async () => {
+      // Still QUEUED from the previous test, but backdate its last update —
+      // no worker is realistically still processing it. Raw SQL bypasses
+      // Prisma's automatic `@updatedAt` touch so this backdate actually sticks.
+      await prisma.$executeRaw`UPDATE "ai_analysis_run" SET "updatedAt" = now() - interval '1 hour' WHERE "analysisRunId" = ${analysisRunReadyId}`;
+
+      const response = await app.inject({ method: "POST", url: `/repositories/${repoReady.id}/ai-analysis`, cookies: { [SESSION_COOKIE_NAME]: userA.sessionToken } });
+
+      expect(response.statusCode).toBe(201); // not 409 — the stale run didn't block a fresh attempt
+      expect(mockEnqueueAIAnalysisJob).toHaveBeenCalled();
+      const count = await prisma.aIAnalysisRun.count({ where: { analysisRunId: analysisRunReadyId } });
+      expect(count).toBe(1); // still the same row, reused — not a duplicate
+    });
+
     it("re-runs a COMPLETED run by reusing the same row and clearing stale agent/finding rows", async () => {
       const before = await prisma.aIAnalysisRun.update({
         where: { analysisRunId: analysisRunReadyId },

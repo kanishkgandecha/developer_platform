@@ -185,6 +185,24 @@ describe.runIf(dbAvailable)("semantic search + embeddings (live database)", () =
       expect(count).toBe(1);
     });
 
+    it("treats a run stuck 'active' well past the staleness threshold as retryable instead of blocking forever", async () => {
+      // Still QUEUED from the previous test, but backdate its last update —
+      // no worker is realistically still processing it. Raw SQL bypasses
+      // Prisma's automatic `@updatedAt` touch so this backdate actually sticks.
+      await prisma.$executeRaw`UPDATE "embedding_run" SET "updatedAt" = now() - interval '1 hour' WHERE "analysisRunId" = ${analysisRunA.id}`;
+
+      const response = await app.inject({
+        method: "POST",
+        url: `/repositories/${repoA.id}/embeddings`,
+        cookies: { [SESSION_COOKIE_NAME]: userA.sessionToken },
+      });
+
+      expect(response.statusCode).toBe(201); // not 409 — the stale run didn't block a fresh attempt
+      expect(mockEnqueueEmbeddingJob).toHaveBeenCalled();
+      const count = await prisma.embeddingRun.count({ where: { analysisRunId: analysisRunA.id } });
+      expect(count).toBe(1); // still the same row, reused — not a duplicate
+    });
+
     it("a repository ID that doesn't exist at all also returns 404, not a different error", async () => {
       const response = await app.inject({
         method: "POST",

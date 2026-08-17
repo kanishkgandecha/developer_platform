@@ -4,6 +4,7 @@ import { prisma } from "@developer-platform/database";
 import type { AgentRun, AIAnalysisRun, AIFinding } from "@prisma/client";
 import {
   ACTIVE_AI_ANALYSIS_STATUSES,
+  isStaleActiveRun,
   type AgentRunDto,
   type AgentType,
   type AIAnalysisRunDto,
@@ -20,6 +21,10 @@ import { env } from "../env.js";
 const repositoryIdParamsSchema = z.object({
   id: z.string().cuid("Invalid repository id"),
 });
+
+// Safety cap for the run-history list endpoint below — see
+// ingestions.ts's identical constant for the full rationale.
+const RUN_HISTORY_LIMIT = 100;
 
 const aiAnalysisIdParamsSchema = z.object({
   id: z.string().cuid("Invalid AI analysis id"),
@@ -161,7 +166,14 @@ export function registerAIAnalysisRoutes(app: FastifyInstance): void {
 
       const existing = await prisma.aIAnalysisRun.findUnique({ where: { analysisRunId: analysisRun.id }, include: { agentRuns: true } });
 
-      if (existing && ACTIVE_AI_ANALYSIS_STATUSES.includes(existing.status as AIAnalysisStatus)) {
+      // A run stuck in an active status well past a reasonable timeout is
+      // treated as orphaned (its worker likely crashed) rather than
+      // blocking retries forever — see packages/shared/src/job-staleness.ts.
+      if (
+        existing &&
+        ACTIVE_AI_ANALYSIS_STATUSES.includes(existing.status as AIAnalysisStatus) &&
+        !isStaleActiveRun(existing.updatedAt, env.STALE_ACTIVE_RUN_MINUTES)
+      ) {
         return reply.code(409).send({
           error: { message: "AI analysis for this repository is already in progress", statusCode: 409 },
           aiAnalysis: toAIAnalysisRunDto(existing),
@@ -211,6 +223,7 @@ export function registerAIAnalysisRoutes(app: FastifyInstance): void {
       where: { repositoryId: repository.id },
       orderBy: { createdAt: "desc" },
       include: { agentRuns: true },
+      take: RUN_HISTORY_LIMIT,
     });
 
     return reply.send({ aiAnalyses: runs.map(toAIAnalysisRunDto) });

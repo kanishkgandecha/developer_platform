@@ -149,6 +149,25 @@ describe.runIf(dbAvailable)("repository ingestion (live database)", () => {
     expect(count).toBe(1); // still exactly one row for this commit — no duplicate created
   });
 
+  it("treats a run stuck 'active' well past the staleness threshold as retryable instead of blocking forever", async () => {
+    mockGetBranchHeadSha.mockResolvedValue("sha-0001");
+    // Simulate an orphaned job: still QUEUED, but its last update was long
+    // ago — no worker is realistically still processing it. Raw SQL bypasses
+    // Prisma's automatic `@updatedAt` touch so this backdate actually sticks.
+    await prisma.$executeRaw`UPDATE "ingestion" SET "updatedAt" = now() - interval '1 hour' WHERE "repositoryId" = ${repoA.id} AND "commitSha" = 'sha-0001'`;
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/repositories/${repoA.id}/ingestions`,
+      cookies: { [SESSION_COOKIE_NAME]: userA.sessionToken },
+    });
+
+    expect(response.statusCode).toBe(201); // not 409 — the stale run didn't block a fresh attempt
+    expect(mockEnqueueIngestionJob).toHaveBeenCalled();
+    const count = await prisma.ingestion.count({ where: { repositoryId: repoA.id, commitSha: "sha-0001" } });
+    expect(count).toBe(1); // still the same row, reused — not a duplicate
+  });
+
   it("reuses (200, no new job) a COMPLETED ingestion for the same commit instead of redoing the work", async () => {
     await prisma.ingestion.updateMany({
       where: { repositoryId: repoA.id, commitSha: "sha-0001" },

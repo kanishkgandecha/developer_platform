@@ -115,6 +115,13 @@ const requiredSchema = z.object({
   // covers both transient provider errors and a schema-invalid response;
   // never unbounded.
   AI_AGENT_MAX_RETRIES: z.coerce.number().int().nonnegative().max(5).default(2),
+
+  // Phase 7 (V1 hardening) — read by apps/api. How long a run can sit in an
+  // active (PENDING/QUEUED/RUNNING-equivalent) status with no progress
+  // before it's treated as orphaned rather than "still legitimately
+  // running," letting a new attempt reuse the row instead of permanently
+  // blocking with 409. See packages/shared/src/job-staleness.ts.
+  STALE_ACTIVE_RUN_MINUTES: z.coerce.number().int().positive().default(30),
 });
 
 /**
