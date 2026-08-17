@@ -212,12 +212,18 @@ importers:
 
   packages/ai:
     dependencies:
+      '@developer-platform/database':
+        specifier: workspace:*
+        version: link:../database
       '@developer-platform/shared':
         specifier: workspace:*
         version: link:../shared
       openai:
         specifier: ^7.4.0
         version: 7.4.0(zod@3.25.76)
+      zod:
+        specifier: ^3.24.1
+        version: 3.25.76
     devDependencies:
       '@developer-platform/config':
         specifier: workspace:*
