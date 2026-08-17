@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { lexicalScoreFor } from "../../src/services/search.js";
+import { lexicalScoreFor } from "./search.js";
 
 describe("lexicalScoreFor", () => {
   it("returns null for a query with no scoreable tokens", () => {

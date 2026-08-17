@@ -15,8 +15,10 @@
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
+    "@developer-platform/database": "workspace:*",
     "@developer-platform/shared": "workspace:*",
-    "openai": "^7.4.0"
+    "openai": "^7.4.0",
+    "zod": "^3.24.1"
   },
   "devDependencies": {
     "@developer-platform/config": "workspace:*",
