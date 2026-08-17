@@ -95,4 +95,28 @@ describe("loadEnv", () => {
       /MAX_FILES_PER_REPOSITORY/,
     );
   });
+
+  it("defaults the Phase 5 embedding/chunking configuration when unset", () => {
+    const env = loadEnv(validEnv);
+    expect(env.EMBEDDING_MODEL).toBe("text-embedding-3-small");
+    expect(env.EMBEDDING_DIMENSIONS).toBe(1536);
+    expect(env.CHUNK_TARGET_CHARS).toBe(1600);
+    expect(env.CHUNK_MAX_CHARS).toBe(4000);
+    expect(env.CHUNK_OVERLAP_LINES).toBe(3);
+    expect(env.EMBEDDING_BATCH_SIZE).toBe(96);
+  });
+
+  it("boots without OPENAI_API_KEY — the embedding feature reports unconfigured, the app still starts", () => {
+    const env = loadEnv(validEnv);
+    expect(env.OPENAI_API_KEY).toBeUndefined();
+  });
+
+  it("coerces and honors an overridden embedding batch size", () => {
+    const env = loadEnv({ ...validEnv, EMBEDDING_BATCH_SIZE: "32" });
+    expect(env.EMBEDDING_BATCH_SIZE).toBe(32);
+  });
+
+  it("rejects an embedding batch size above OpenAI's 2048-input request ceiling", () => {
+    expect(() => loadEnv({ ...validEnv, EMBEDDING_BATCH_SIZE: "4000" })).toThrowError(/EMBEDDING_BATCH_SIZE/);
+  });
 });

@@ -63,12 +63,45 @@ const requiredSchema = z.object({
   MAX_REPOSITORY_SIZE_MB: z.coerce.number().int().positive().default(500),
   MAX_FILE_SIZE_MB: z.coerce.number().int().positive().default(10),
   MAX_FILES_PER_REPOSITORY: z.coerce.number().int().positive().default(5000),
+
+  // Semantic search / RAG foundation (Phase 5) — read by apps/worker (chunking
+  // + embedding pipeline) and apps/api (query embedding for search); both
+  // validate the same schema for consistency, same pattern as the Phase 3
+  // ingestion limits above. All have sensible defaults — only set these to
+  // override them. See docs/semantic-search.md.
+  //
+  // The embedding model name — also determines the pgvector column's fixed
+  // dimension (EMBEDDING_DIMENSIONS below), so changing this without a new
+  // migration will not silently "just work" — see docs/semantic-search.md's
+  // "changing the embedding model" section.
+  EMBEDDING_MODEL: z.string().min(1).default("text-embedding-3-small"),
+  // text-embedding-3-small's native output size. Not derived from the model
+  // name at runtime (OpenAI doesn't expose it via an API call) — asserted
+  // here and cross-checked against the `vector(1536)` column width the
+  // migration hard-codes; deliberately not configurable independently of
+  // EMBEDDING_MODEL.
+  EMBEDDING_DIMENSIONS: z.coerce.number().int().positive().default(1536),
+  // Deterministic chunking boundaries — see packages/code-analysis/src/chunking.
+  // Character counts, not tokens (documented approximation, no tokenizer
+  // dependency — see docs/semantic-search.md).
+  CHUNK_TARGET_CHARS: z.coerce.number().int().positive().default(1600),
+  CHUNK_MAX_CHARS: z.coerce.number().int().positive().default(4000),
+  CHUNK_OVERLAP_LINES: z.coerce.number().int().nonnegative().default(3),
+  // How many chunk texts go into a single OpenAI embeddings.create call.
+  // OpenAI accepts up to 2048 inputs per request; 96 is a conservative
+  // default chosen to keep any one request's total token count comfortably
+  // under the per-request token ceiling for typical code-chunk sizes rather
+  // than blindly maxing out the input-count limit — see
+  // docs/semantic-search.md's batching section.
+  EMBEDDING_BATCH_SIZE: z.coerce.number().int().positive().max(2048).default(96),
 });
 
 /**
- * Variables reserved for functionality landing in later phases (OpenAI-backed
- * agents). Their names are locked in now so downstream phases don't need to
- * rename anything, but nothing reads their values yet.
+ * OpenAI API key for the embedding provider (Phase 5) and, later, the agent
+ * framework (Phase 6+). Deliberately optional — the rest of the platform
+ * must boot and run without it; only the embedding/search feature itself
+ * reports "not configured" (503) when it's missing. See
+ * docs/semantic-search.md's "no API key" section.
  */
 const futurePhaseSchema = z.object({
   OPENAI_API_KEY: z.string().optional(),
