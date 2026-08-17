@@ -51,17 +51,20 @@ entirely and needs either a shared parent domain + explicit `Domain` cookie attr
 reverse proxy unifying both under one origin — not yet implemented, tracked here rather than
 hidden.
 
-## Repository ingestion (worker) disk in production
+## Repository ingestion and analysis (worker) disk in production
 
-Each ingestion writes a temporary, per-ingestion workspace to local disk
-(`INGESTION_WORKSPACE_DIR`, see [repository-ingestion.md](./repository-ingestion.md)) and deletes
-it when the job finishes. It's ephemeral by design — no persistent volume is required, and none
-should be mounted (a crashed worker leaving orphaned workspace directories behind is a disk-quota
-concern, not a data-loss one, since nothing durable lives there). Whatever host runs `apps/worker`
-needs enough local/ephemeral disk headroom for `MAX_REPOSITORY_SIZE_MB` times the worker's
-configured BullMQ concurrency (2 by default) worth of simultaneous extractions, plus normal
-margin — tune `MAX_REPOSITORY_SIZE_MB`/`MAX_FILES_PER_REPOSITORY` for production traffic rather
-than reusing the local-dev defaults unchanged.
+Each ingestion — and, as of Phase 4, each code-analysis run, which re-downloads and re-extracts the
+same archive into its own workspace (see [code-intelligence.md](./code-intelligence.md) for why) —
+writes a temporary, per-run workspace to local disk (`INGESTION_WORKSPACE_DIR`, shared by both
+queues, see [repository-ingestion.md](./repository-ingestion.md)) and deletes it when the job
+finishes. It's ephemeral by design — no persistent volume is required, and none should be mounted (a
+crashed worker leaving orphaned workspace directories behind is a disk-quota concern, not a
+data-loss one, since nothing durable lives there). Whatever host runs `apps/worker` needs enough
+local/ephemeral disk headroom for `MAX_REPOSITORY_SIZE_MB` times the combined concurrency of *both*
+queues (2 + 2 by default = 4 simultaneous extractions worst case, since ingestion and analysis run
+as independent BullMQ workers in the same process), plus normal margin — tune
+`MAX_REPOSITORY_SIZE_MB`/`MAX_FILES_PER_REPOSITORY` for production traffic rather than reusing the
+local-dev defaults unchanged.
 
 ## Not yet solved (tracked for the phase that needs it)
 
